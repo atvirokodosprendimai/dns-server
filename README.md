@@ -17,7 +17,7 @@ A minimal authoritative DNS server (`A`, `NS`, `SOA`) with an HTTP control API a
 API_TOKEN=supersecret \
 DB_PATH=./dns.db \
 DEFAULT_ZONE=example.com \
-DEFAULT_NS=ns1.example.com,ns2.example.com \
+DEFAULT_NS=love.me.cloudroof.eu,hate.you.cloudroof.eu \
 PEERS=http://10.1.0.2:8080,http://10.1.0.3:8080 \
 go run .
 ```
@@ -59,7 +59,7 @@ Update zone NS:
 curl -sS -X PUT "http://127.0.0.1:8080/v1/zones/example.com" \
   -H "Authorization: Bearer supersecret" \
   -H "Content-Type: application/json" \
-  -d '{"ns":["ns1.example.com","ns2.example.com"],"soa_ttl":60}'
+  -d '{"ns":["love.me.cloudroof.eu","hate.you.cloudroof.eu"],"soa_ttl":60}'
 ```
 
 Verify:
@@ -84,3 +84,15 @@ kdig @127.0.0.1 +https app.example.com A
 ```
 
 If you expose this publicly, terminate TLS in front of the app (for example with Caddy, Nginx, or HAProxy), because standard DoH clients expect HTTPS.
+
+## Scripts
+
+- `scripts/bootstrap-db.sh` - seeds zone + sample A records through API into a fresh DB.
+- `scripts/smoke-test.sh` - verifies A/NS/SOA responses and DoH endpoint reachability.
+- `scripts/bootstrap-local-db.sh` - starts local server, bootstraps DB, runs smoke checks.
+
+Example:
+
+```bash
+bash scripts/bootstrap-local-db.sh
+```

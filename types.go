@@ -1,0 +1,101 @@
+package main
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type config struct {
+	NodeID         string
+	HTTPListen     string
+	DNSUDPListen   string
+	DNSTCPListen   string
+	DBPath         string
+	APIToken       string
+	SyncToken      string
+	Peers          []string
+	DefaultTTL     uint32
+	DefaultZone    string
+	DefaultNS      []string
+	SyncHTTPClient *http.Client
+}
+
+type zoneConfig struct {
+	Zone      string    `json:"zone"`
+	NS        []string  `json:"ns"`
+	SOATTL    uint32    `json:"soa_ttl"`
+	Serial    uint32    `json:"serial"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type aRecord struct {
+	Name      string    `json:"name"`
+	IP        string    `json:"ip"`
+	TTL       uint32    `json:"ttl"`
+	Zone      string    `json:"zone"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Version   int64     `json:"version"`
+	Source    string    `json:"source"`
+}
+
+type syncEvent struct {
+	OriginNode string      `json:"origin_node"`
+	Op         string      `json:"op"`
+	Record     *aRecord    `json:"record,omitempty"`
+	Name       string      `json:"name,omitempty"`
+	Zone       string      `json:"zone,omitempty"`
+	Version    int64       `json:"version"`
+	EventTime  time.Time   `json:"event_time"`
+	ZoneConfig *zoneConfig `json:"zone_config,omitempty"`
+}
+
+type upsertRecordRequest struct {
+	IP        string `json:"ip"`
+	TTL       uint32 `json:"ttl"`
+	Zone      string `json:"zone"`
+	Propagate *bool  `json:"propagate,omitempty"`
+}
+
+type upsertZoneRequest struct {
+	NS        []string `json:"ns"`
+	SOATTL    uint32   `json:"soa_ttl"`
+	Propagate *bool    `json:"propagate,omitempty"`
+}
+
+type store struct {
+	mu      sync.RWMutex
+	records map[string]aRecord
+	zones   map[string]zoneConfig
+}
+
+type recordModel struct {
+	Name      string    `gorm:"primaryKey;size:255"`
+	IP        string    `gorm:"size:45;not null"`
+	TTL       uint32    `gorm:"not null"`
+	Zone      string    `gorm:"size:255;not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+	Version   int64     `gorm:"not null;index"`
+	Source    string    `gorm:"size:128;not null"`
+}
+
+type zoneModel struct {
+	Zone      string    `gorm:"primaryKey;size:255"`
+	NSJSON    string    `gorm:"type:text;not null"`
+	SOATTL    uint32    `gorm:"not null"`
+	Serial    uint32    `gorm:"not null;index"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+type persistence struct {
+	db *gorm.DB
+}
+
+type server struct {
+	cfg     config
+	data    *store
+	persist *persistence
+	start   time.Time
+}
