@@ -313,6 +313,8 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{"type": recordType, "ttl": mustAtoi(ttl, 60), "zone": zone}
 	if recordType == "TXT" {
 		body["text"] = value
+	} else if recordType == "CNAME" {
+		body["target"] = value
 	} else {
 		body["ip"] = value
 	}
@@ -542,8 +544,9 @@ const indexHTML = `<!doctype html>
             <option>A</option>
             <option>AAAA</option>
             <option>TXT</option>
+            <option>CNAME</option>
           </select>
-          <label>Value (IP for A/AAAA, text for TXT)</label><input name="value" required>
+          <label>Value (IP for A/AAAA, text for TXT, target host for CNAME)</label><input name="value" required>
           <label>Zone (optional)</label><input name="zone" placeholder="cloudroof.eu">
           <label>TTL</label><input name="ttl" value="60">
           <button type="submit">Sync Record To All Endpoints</button>
@@ -560,6 +563,7 @@ const indexHTML = `<!doctype html>
             <option>A</option>
             <option>AAAA</option>
             <option>TXT</option>
+            <option>CNAME</option>
           </select>
           <button type="submit">Delete On All Endpoints</button>
         </form>

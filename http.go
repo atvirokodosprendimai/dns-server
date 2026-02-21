@@ -153,10 +153,13 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 	}
 
 	text := strings.TrimSpace(req.Text)
+	target := strings.TrimSpace(req.Target)
 	rawType := strings.ToUpper(strings.TrimSpace(req.Type))
 	if rawType == "" {
 		if text != "" {
 			rawType = "TXT"
+		} else if target != "" {
+			rawType = "CNAME"
 		} else {
 			maybeIP := net.ParseIP(strings.TrimSpace(req.IP))
 			if maybeIP != nil && maybeIP.To4() == nil {
@@ -166,8 +169,8 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 			}
 		}
 	}
-	if rawType != "A" && rawType != "AAAA" && rawType != "TXT" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be A, AAAA or TXT"})
+	if rawType != "A" && rawType != "AAAA" && rawType != "TXT" && rawType != "CNAME" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be A, AAAA, TXT or CNAME"})
 		return
 	}
 	recordType := normalizeRecordType(rawType)
@@ -189,6 +192,13 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type TXT requires text field"})
 		return
 	}
+	if recordType == "CNAME" {
+		if target == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type CNAME requires target field"})
+			return
+		}
+		target = normalizeName(target)
+	}
 
 	ttl := req.TTL
 	if ttl == 0 {
@@ -207,6 +217,7 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 		Type:      recordType,
 		IP:        strings.TrimSpace(req.IP),
 		Text:      text,
+		Target:    target,
 		TTL:       ttl,
 		Zone:      zone,
 		UpdatedAt: now,
@@ -215,6 +226,15 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 	}
 	if recordType == "A" || recordType == "AAAA" {
 		rec.IP = parsedIP.String()
+		rec.Text = ""
+		rec.Target = ""
+	}
+	if recordType == "TXT" {
+		rec.IP = ""
+		rec.Target = ""
+	}
+	if recordType == "CNAME" {
+		rec.IP = ""
 		rec.Text = ""
 	}
 
@@ -255,8 +275,8 @@ func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request, name
 	now := time.Now().UTC()
 	version := now.UnixNano()
 	recordType := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("type")))
-	if recordType != "" && recordType != "A" && recordType != "AAAA" && recordType != "TXT" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type filter must be A, AAAA or TXT"})
+	if recordType != "" && recordType != "A" && recordType != "AAAA" && recordType != "TXT" && recordType != "CNAME" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type filter must be A, AAAA, TXT or CNAME"})
 		return
 	}
 
@@ -373,6 +393,8 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(rec.Type) == "" {
 			if strings.TrimSpace(rec.Text) != "" {
 				rec.Type = "TXT"
+			} else if strings.TrimSpace(rec.Target) != "" {
+				rec.Type = "CNAME"
 			} else if ip := net.ParseIP(rec.IP); ip != nil && ip.To4() == nil {
 				rec.Type = "AAAA"
 			}
@@ -392,6 +414,15 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if rec.Type == "TXT" && strings.TrimSpace(rec.Text) == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type TXT requires text"})
 			return
+		}
+		if rec.Type == "CNAME" {
+			if strings.TrimSpace(rec.Target) == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type CNAME requires target"})
+				return
+			}
+			rec.Target = normalizeName(rec.Target)
+			rec.IP = ""
+			rec.Text = ""
 		}
 		rec.Source = ev.OriginNode
 		rec.UpdatedAt = ev.EventTime
@@ -417,8 +448,8 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	case "delete":
 		evType := strings.ToUpper(strings.TrimSpace(ev.Type))
-		if evType != "" && evType != "A" && evType != "AAAA" && evType != "TXT" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync delete type must be A, AAAA or TXT"})
+		if evType != "" && evType != "A" && evType != "AAAA" && evType != "TXT" && evType != "CNAME" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync delete type must be A, AAAA, TXT or CNAME"})
 			return
 		}
 		if s.data.deleteRecordByType(ev.Name, evType, ev.Version) {

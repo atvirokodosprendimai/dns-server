@@ -44,8 +44,10 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeANY:
+			hasDirectAnswer := false
 			for _, rec := range s.data.getRecords(name, q.Qtype) {
 				if rec.Type == "A" {
+					hasDirectAnswer = true
 					rr := &dns.A{
 						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rec.TTL},
 						A:   net.ParseIP(rec.IP).To4(),
@@ -64,28 +66,71 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 					}
 				}
 				if rec.Type == "TXT" && q.Qtype == dns.TypeANY {
+					hasDirectAnswer = true
 					resp.Answer = append(resp.Answer, &dns.TXT{
 						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
 						Txt: chunkTXT(rec.Text),
 					})
 				}
+				if rec.Type == "CNAME" && q.Qtype == dns.TypeANY {
+					hasDirectAnswer = true
+					resp.Answer = append(resp.Answer, &dns.CNAME{
+						Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+						Target: normalizeName(rec.Target),
+					})
+				}
+			}
+			if q.Qtype == dns.TypeA && !hasDirectAnswer {
+				for _, rec := range s.data.getRecords(name, dns.TypeCNAME) {
+					resp.Answer = append(resp.Answer, &dns.CNAME{
+						Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+						Target: normalizeName(rec.Target),
+					})
+				}
 			}
 		case dns.TypeAAAA:
+			hasDirectAnswer := false
 			for _, rec := range s.data.getRecords(name, q.Qtype) {
 				ip := net.ParseIP(rec.IP)
 				if ip == nil || ip.To4() != nil {
 					continue
 				}
+				hasDirectAnswer = true
 				resp.Answer = append(resp.Answer, &dns.AAAA{
 					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
 					AAAA: ip,
 				})
 			}
+			if !hasDirectAnswer {
+				for _, rec := range s.data.getRecords(name, dns.TypeCNAME) {
+					resp.Answer = append(resp.Answer, &dns.CNAME{
+						Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+						Target: normalizeName(rec.Target),
+					})
+				}
+			}
 		case dns.TypeTXT:
+			hasDirectAnswer := false
 			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				hasDirectAnswer = true
 				resp.Answer = append(resp.Answer, &dns.TXT{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
 					Txt: chunkTXT(rec.Text),
+				})
+			}
+			if !hasDirectAnswer {
+				for _, rec := range s.data.getRecords(name, dns.TypeCNAME) {
+					resp.Answer = append(resp.Answer, &dns.CNAME{
+						Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+						Target: normalizeName(rec.Target),
+					})
+				}
+			}
+		case dns.TypeCNAME:
+			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				resp.Answer = append(resp.Answer, &dns.CNAME{
+					Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+					Target: normalizeName(rec.Target),
 				})
 			}
 		case dns.TypeNS:
@@ -113,7 +158,7 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 		}
 
 		if zone, ok := s.data.bestZone(firstQ); ok {
-			if s.data.hasName(firstQ) && (firstType == dns.TypeA || firstType == dns.TypeAAAA || firstType == dns.TypeTXT || firstType == dns.TypeANY) {
+			if s.data.hasName(firstQ) && (firstType == dns.TypeA || firstType == dns.TypeAAAA || firstType == dns.TypeTXT || firstType == dns.TypeCNAME || firstType == dns.TypeANY) {
 				resp.Rcode = dns.RcodeSuccess
 				resp.Ns = append(resp.Ns, soaForZone(zone))
 			} else {

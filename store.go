@@ -87,6 +87,10 @@ func (s *store) getRecords(name string, qtype uint16) []aRecord {
 			if rec.Type == "TXT" {
 				out = append(out, rec)
 			}
+		case dns.TypeCNAME:
+			if rec.Type == "CNAME" {
+				out = append(out, rec)
+			}
 		}
 	}
 

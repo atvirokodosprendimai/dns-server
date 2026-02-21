@@ -130,3 +130,50 @@ func TestResolveDNSTXTRecord(t *testing.T) {
 		t.Fatalf("unexpected TXT payload: %#v", txt.Txt)
 	}
 }
+
+func TestResolveDNSCNAMERecord(t *testing.T) {
+	s := newTestServer(t)
+	now := time.Now().UTC()
+	s.data.upsertZone(zoneConfig{Zone: "example.com", NS: []string{"love.me.cloudroof.eu"}, SOATTL: 60, Serial: 1, UpdatedAt: now})
+	s.data.setRecord(aRecord{Name: "www.example.com", Type: "CNAME", Zone: "example.com", Target: "app.example.com", TTL: 30, Version: 1, UpdatedAt: now})
+
+	req := new(dns.Msg)
+	req.SetQuestion("www.example.com.", dns.TypeCNAME)
+
+	resp := s.resolveDNS(req)
+	if resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected success rcode, got %d", resp.Rcode)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("expected one answer, got %d", len(resp.Answer))
+	}
+
+	cname, ok := resp.Answer[0].(*dns.CNAME)
+	if !ok {
+		t.Fatalf("expected CNAME answer, got %T", resp.Answer[0])
+	}
+	if cname.Target != "app.example.com." {
+		t.Fatalf("unexpected CNAME target: %s", cname.Target)
+	}
+}
+
+func TestResolveDNSReturnsCNAMEForAQueryWhenAliasExists(t *testing.T) {
+	s := newTestServer(t)
+	now := time.Now().UTC()
+	s.data.upsertZone(zoneConfig{Zone: "example.com", NS: []string{"love.me.cloudroof.eu"}, SOATTL: 60, Serial: 1, UpdatedAt: now})
+	s.data.setRecord(aRecord{Name: "www.example.com", Type: "CNAME", Zone: "example.com", Target: "app.example.com", TTL: 30, Version: 1, UpdatedAt: now})
+
+	req := new(dns.Msg)
+	req.SetQuestion("www.example.com.", dns.TypeA)
+
+	resp := s.resolveDNS(req)
+	if resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected success rcode, got %d", resp.Rcode)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("expected one answer, got %d", len(resp.Answer))
+	}
+	if _, ok := resp.Answer[0].(*dns.CNAME); !ok {
+		t.Fatalf("expected CNAME in answer for A query, got %T", resp.Answer[0])
+	}
+}

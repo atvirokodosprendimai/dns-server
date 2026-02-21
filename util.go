@@ -33,7 +33,7 @@ func normalizeNames(in []string) []string {
 func normalizeRecordType(recordType string) string {
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
 	switch recordType {
-	case "AAAA", "TXT":
+	case "AAAA", "TXT", "CNAME":
 		return recordType
 	default:
 		return "A"

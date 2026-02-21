@@ -105,6 +105,29 @@ func TestHTTPRecordUpsertTXT(t *testing.T) {
 	}
 }
 
+func TestHTTPRecordUpsertCNAME(t *testing.T) {
+	s := newTestServer(t)
+	r := s.newRouter()
+
+	body := `{"type":"CNAME","target":"app.example.com","ttl":20}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/records/www.example.com", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for CNAME put, got %d", resp.Code)
+	}
+
+	var out aRecord
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if out.Type != "CNAME" || out.Target != "app.example.com." {
+		t.Fatalf("unexpected CNAME record: %#v", out)
+	}
+}
+
 func TestDoHGetAndPost(t *testing.T) {
 	s := newTestServer(t)
 	now := time.Now().UTC()

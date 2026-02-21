@@ -1,12 +1,12 @@
 # dns-server
 
-A minimal authoritative DNS server (`A`, `AAAA`, `TXT`, `NS`, `SOA`) with an HTTP control API and peer-to-peer synchronization across anycast nodes.
+A minimal authoritative DNS server (`A`, `AAAA`, `TXT`, `CNAME`, `NS`, `SOA`) with an HTTP control API and peer-to-peer synchronization across anycast nodes.
 
 ## What It Does
 
 - Answers DNS queries over UDP/TCP using `github.com/miekg/dns`.
 - Supports DNS over HTTPS (DoH) at `/dns-query`.
-- Keeps active `A`/`AAAA`/`TXT` records and zone (`NS`/`SOA`) config in memory.
+- Keeps active `A`/`AAAA`/`TXT`/`CNAME` records and zone (`NS`/`SOA`) config in memory.
 - Persists all records and zones in SQLite (pure Go, no CGO).
 - Lets you manage records via HTTP API with token authentication.
 - Replicates updates to peer nodes through `/v1/sync/event` (for example over VPN).
@@ -62,6 +62,15 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/records/meta.example.com" \
   -H "Authorization: Bearer supersecret" \
   -H "Content-Type: application/json" \
   -d '{"type":"TXT","text":"site-verification=abc","ttl":60}'
+```
+
+Create or update a `CNAME` record:
+
+```bash
+curl -sS -X PUT "http://127.0.0.1:8080/v1/records/www.example.com" \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"CNAME","target":"app.example.com","ttl":60}'
 ```
 
 Delete a record:

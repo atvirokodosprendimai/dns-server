@@ -36,6 +36,7 @@ type aRecord struct {
 	Type      string    `json:"type"`
 	IP        string    `json:"ip"`
 	Text      string    `json:"text,omitempty"`
+	Target    string    `json:"target,omitempty"`
 	TTL       uint32    `json:"ttl"`
 	Zone      string    `json:"zone"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -59,6 +60,7 @@ type upsertRecordRequest struct {
 	IP        string `json:"ip"`
 	Type      string `json:"type,omitempty"`
 	Text      string `json:"text,omitempty"`
+	Target    string `json:"target,omitempty"`
 	TTL       uint32 `json:"ttl"`
 	Zone      string `json:"zone"`
 	Propagate *bool  `json:"propagate,omitempty"`
@@ -81,6 +83,7 @@ type recordModel struct {
 	Type      string    `gorm:"primaryKey;size:10"`
 	IP        string    `gorm:"size:45"`
 	Text      string    `gorm:"type:text"`
+	Target    string    `gorm:"size:255"`
 	TTL       uint32    `gorm:"not null"`
 	Zone      string    `gorm:"size:255;not null"`
 	UpdatedAt time.Time `gorm:"not null"`
