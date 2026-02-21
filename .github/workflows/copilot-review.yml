@@ -52,7 +52,8 @@ jobs:
       (
         startsWith(github.event.comment.body, '/copilot review') ||
         startsWith(github.event.comment.body, '/copilot rerun') ||
-        startsWith(github.event.comment.body, '/copilot changes')
+        startsWith(github.event.comment.body, '/copilot changes') ||
+        contains(github.event.comment.body, '@copilot')
       )
     runs-on: ubuntu-latest
 
@@ -65,6 +66,7 @@ jobs:
             const repo = context.repo.repo;
             const pull_number = context.payload.issue.number;
             const body = (context.payload.comment.body || '').trim().toLowerCase();
+            const mentionMode = body.includes('@copilot');
 
             try {
               if (body.startsWith('/copilot rerun')) {
@@ -89,7 +91,7 @@ jobs:
                 reviewers: ["Copilot"],
               });
 
-              if (body.startsWith('/copilot changes')) {
+              if (body.startsWith('/copilot changes') || mentionMode) {
                 await github.rest.issues.createComment({
                   owner,
                   repo,
@@ -97,7 +99,9 @@ jobs:
                   body: [
                     'Requested a fresh Copilot review.',
                     '',
-                    'To ask Copilot to make concrete code edits in this PR:',
+                    mentionMode
+                      ? 'Detected `@copilot` request. Use the text in your comment as the implementation goal for Copilot when applying suggestions.'
+                      : 'To ask Copilot to make concrete code edits in this PR:',
                     '1. Open Copilot review comments.',
                     '2. Click **Implement suggestion** on the comment(s) you want applied.',
                     '3. In the draft prompt, describe exactly what should be changed and submit.',
