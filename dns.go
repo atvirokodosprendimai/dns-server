@@ -44,14 +44,49 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeANY:
-			if rec, ok := s.data.getRecord(name); ok {
-				rr := &dns.A{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rec.TTL},
-					A:   net.ParseIP(rec.IP).To4(),
+			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				if rec.Type == "A" {
+					rr := &dns.A{
+						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rec.TTL},
+						A:   net.ParseIP(rec.IP).To4(),
+					}
+					if rr.A != nil {
+						resp.Answer = append(resp.Answer, rr)
+					}
 				}
-				if rr.A != nil {
-					resp.Answer = append(resp.Answer, rr)
+				if rec.Type == "AAAA" && q.Qtype == dns.TypeANY {
+					ip := net.ParseIP(rec.IP)
+					if ip != nil && ip.To4() == nil {
+						resp.Answer = append(resp.Answer, &dns.AAAA{
+							Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
+							AAAA: ip,
+						})
+					}
 				}
+				if rec.Type == "TXT" && q.Qtype == dns.TypeANY {
+					resp.Answer = append(resp.Answer, &dns.TXT{
+						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
+						Txt: chunkTXT(rec.Text),
+					})
+				}
+			}
+		case dns.TypeAAAA:
+			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				ip := net.ParseIP(rec.IP)
+				if ip == nil || ip.To4() != nil {
+					continue
+				}
+				resp.Answer = append(resp.Answer, &dns.AAAA{
+					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
+					AAAA: ip,
+				})
+			}
+		case dns.TypeTXT:
+			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				resp.Answer = append(resp.Answer, &dns.TXT{
+					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
+					Txt: chunkTXT(rec.Text),
+				})
 			}
 		case dns.TypeNS:
 			if zone, ok := s.data.getZone(name); ok {
@@ -71,19 +106,39 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 
 	if len(resp.Answer) == 0 {
 		firstQ := "."
+		firstType := dns.TypeNone
 		if len(req.Question) > 0 {
 			firstQ = normalizeName(req.Question[0].Name)
+			firstType = req.Question[0].Qtype
 		}
 
 		if zone, ok := s.data.bestZone(firstQ); ok {
-			resp.Rcode = dns.RcodeNameError
-			resp.Ns = append(resp.Ns, soaForZone(zone))
+			if s.data.hasName(firstQ) && (firstType == dns.TypeA || firstType == dns.TypeAAAA || firstType == dns.TypeTXT || firstType == dns.TypeANY) {
+				resp.Rcode = dns.RcodeSuccess
+				resp.Ns = append(resp.Ns, soaForZone(zone))
+			} else {
+				resp.Rcode = dns.RcodeNameError
+				resp.Ns = append(resp.Ns, soaForZone(zone))
+			}
 		} else {
 			resp.Rcode = dns.RcodeRefused
 		}
 	}
 
 	return resp
+}
+
+func chunkTXT(v string) []string {
+	if v == "" {
+		return []string{""}
+	}
+	out := make([]string, 0, (len(v)/255)+1)
+	for len(v) > 255 {
+		out = append(out, v[:255])
+		v = v[255:]
+	}
+	out = append(out, v)
+	return out
 }
 
 func soaForZone(z zoneConfig) dns.RR {

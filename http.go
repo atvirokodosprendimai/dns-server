@@ -152,9 +152,41 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	ip := net.ParseIP(strings.TrimSpace(req.IP)).To4()
-	if ip == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ip must be valid IPv4"})
+	text := strings.TrimSpace(req.Text)
+	rawType := strings.ToUpper(strings.TrimSpace(req.Type))
+	if rawType == "" {
+		if text != "" {
+			rawType = "TXT"
+		} else {
+			maybeIP := net.ParseIP(strings.TrimSpace(req.IP))
+			if maybeIP != nil && maybeIP.To4() == nil {
+				rawType = "AAAA"
+			} else {
+				rawType = "A"
+			}
+		}
+	}
+	if rawType != "A" && rawType != "AAAA" && rawType != "TXT" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be A, AAAA or TXT"})
+		return
+	}
+	recordType := normalizeRecordType(rawType)
+
+	parsedIP := net.ParseIP(strings.TrimSpace(req.IP))
+	if recordType == "A" {
+		if parsedIP == nil || parsedIP.To4() == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type A requires IPv4"})
+			return
+		}
+	}
+	if recordType == "AAAA" {
+		if parsedIP == nil || parsedIP.To4() != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type AAAA requires IPv6"})
+			return
+		}
+	}
+	if recordType == "TXT" && text == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type TXT requires text field"})
 		return
 	}
 
@@ -172,12 +204,18 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 	version := now.UnixNano()
 	rec := aRecord{
 		Name:      name,
-		IP:        ip.String(),
+		Type:      recordType,
+		IP:        strings.TrimSpace(req.IP),
+		Text:      text,
 		TTL:       ttl,
 		Zone:      zone,
 		UpdatedAt: now,
 		Version:   version,
 		Source:    s.cfg.NodeID,
+	}
+	if recordType == "A" || recordType == "AAAA" {
+		rec.IP = parsedIP.String()
+		rec.Text = ""
 	}
 
 	zoneCfg := zoneConfig{
@@ -216,14 +254,19 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request, name string) {
 	now := time.Now().UTC()
 	version := now.UnixNano()
+	recordType := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("type")))
+	if recordType != "" && recordType != "A" && recordType != "AAAA" && recordType != "TXT" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type filter must be A, AAAA or TXT"})
+		return
+	}
 
-	if s.data.deleteRecord(name, version) {
-		if err := s.persist.deleteRecord(name, version); err != nil {
+	if s.data.deleteRecordByType(name, recordType, version) {
+		if err := s.persist.deleteRecord(name, recordType, version); err != nil {
 			log.Printf("persist record delete failed: %v", err)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": name, "version": version})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": name, "type": recordType, "version": version})
 
 	propagate := true
 	if q := r.URL.Query().Get("propagate"); strings.EqualFold(q, "false") {
@@ -234,6 +277,7 @@ func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request, name
 			OriginNode: s.cfg.NodeID,
 			Op:         "delete",
 			Name:       name,
+			Type:       recordType,
 			Version:    version,
 			EventTime:  now,
 		})
@@ -326,6 +370,29 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if rec.Zone == "" {
 			rec.Zone = s.inferZone(rec.Name)
 		}
+		if strings.TrimSpace(rec.Type) == "" {
+			if strings.TrimSpace(rec.Text) != "" {
+				rec.Type = "TXT"
+			} else if ip := net.ParseIP(rec.IP); ip != nil && ip.To4() == nil {
+				rec.Type = "AAAA"
+			}
+		}
+		rec.Type = normalizeRecordType(rec.Type)
+		if rec.Type == "A" && net.ParseIP(rec.IP).To4() == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type A requires IPv4"})
+			return
+		}
+		if rec.Type == "AAAA" {
+			ip := net.ParseIP(rec.IP)
+			if ip == nil || ip.To4() != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type AAAA requires IPv6"})
+				return
+			}
+		}
+		if rec.Type == "TXT" && strings.TrimSpace(rec.Text) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type TXT requires text"})
+			return
+		}
 		rec.Source = ev.OriginNode
 		rec.UpdatedAt = ev.EventTime
 
@@ -349,8 +416,13 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 			log.Printf("sync set skipped zone defaults for %s: %v", rec.Zone, err)
 		}
 	case "delete":
-		if s.data.deleteRecord(ev.Name, ev.Version) {
-			if err := s.persist.deleteRecord(normalizeName(ev.Name), ev.Version); err != nil {
+		evType := strings.ToUpper(strings.TrimSpace(ev.Type))
+		if evType != "" && evType != "A" && evType != "AAAA" && evType != "TXT" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync delete type must be A, AAAA or TXT"})
+			return
+		}
+		if s.data.deleteRecordByType(ev.Name, evType, ev.Version) {
+			if err := s.persist.deleteRecord(normalizeName(ev.Name), evType, ev.Version); err != nil {
 				log.Printf("persist record delete failed: %v", err)
 			}
 		}

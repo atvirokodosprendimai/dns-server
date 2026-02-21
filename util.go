@@ -30,6 +30,16 @@ func normalizeNames(in []string) []string {
 	return out
 }
 
+func normalizeRecordType(recordType string) string {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	switch recordType {
+	case "AAAA", "TXT":
+		return recordType
+	default:
+		return "A"
+	}
+}
+
 func decodeJSON(r io.Reader, out any) error {
 	dec := json.NewDecoder(io.LimitReader(r, 1<<20))
 	dec.DisallowUnknownFields()

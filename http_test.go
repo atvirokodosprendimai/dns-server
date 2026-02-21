@@ -59,6 +59,52 @@ func TestHTTPRecordUpsertAndList(t *testing.T) {
 	}
 }
 
+func TestHTTPRecordUpsertAAAA(t *testing.T) {
+	s := newTestServer(t)
+	r := s.newRouter()
+
+	body := `{"ip":"2001:db8::5","type":"AAAA","ttl":15}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/records/ipv6.example.com", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for AAAA put, got %d", resp.Code)
+	}
+
+	var out aRecord
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if out.Type != "AAAA" {
+		t.Fatalf("expected AAAA type, got %s", out.Type)
+	}
+}
+
+func TestHTTPRecordUpsertTXT(t *testing.T) {
+	s := newTestServer(t)
+	r := s.newRouter()
+
+	body := `{"type":"TXT","text":"site-verification=abc","ttl":15}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/records/txt.example.com", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for TXT put, got %d", resp.Code)
+	}
+
+	var out aRecord
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if out.Type != "TXT" || out.Text != "site-verification=abc" {
+		t.Fatalf("unexpected TXT record: %#v", out)
+	}
+}
+
 func TestDoHGetAndPost(t *testing.T) {
 	s := newTestServer(t)
 	now := time.Now().UTC()

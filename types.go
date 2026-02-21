@@ -33,7 +33,9 @@ type zoneConfig struct {
 
 type aRecord struct {
 	Name      string    `json:"name"`
+	Type      string    `json:"type"`
 	IP        string    `json:"ip"`
+	Text      string    `json:"text,omitempty"`
 	TTL       uint32    `json:"ttl"`
 	Zone      string    `json:"zone"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -46,6 +48,7 @@ type syncEvent struct {
 	Op         string      `json:"op"`
 	Record     *aRecord    `json:"record,omitempty"`
 	Name       string      `json:"name,omitempty"`
+	Type       string      `json:"type,omitempty"`
 	Zone       string      `json:"zone,omitempty"`
 	Version    int64       `json:"version"`
 	EventTime  time.Time   `json:"event_time"`
@@ -54,6 +57,8 @@ type syncEvent struct {
 
 type upsertRecordRequest struct {
 	IP        string `json:"ip"`
+	Type      string `json:"type,omitempty"`
+	Text      string `json:"text,omitempty"`
 	TTL       uint32 `json:"ttl"`
 	Zone      string `json:"zone"`
 	Propagate *bool  `json:"propagate,omitempty"`
@@ -73,7 +78,9 @@ type store struct {
 
 type recordModel struct {
 	Name      string    `gorm:"primaryKey;size:255"`
-	IP        string    `gorm:"size:45;not null"`
+	Type      string    `gorm:"primaryKey;size:10"`
+	IP        string    `gorm:"size:45"`
+	Text      string    `gorm:"type:text"`
 	TTL       uint32    `gorm:"not null"`
 	Zone      string    `gorm:"size:255;not null"`
 	UpdatedAt time.Time `gorm:"not null"`

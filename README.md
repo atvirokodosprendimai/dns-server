@@ -1,12 +1,12 @@
 # dns-server
 
-A minimal authoritative DNS server (`A`, `NS`, `SOA`) with an HTTP control API and peer-to-peer synchronization across anycast nodes.
+A minimal authoritative DNS server (`A`, `AAAA`, `TXT`, `NS`, `SOA`) with an HTTP control API and peer-to-peer synchronization across anycast nodes.
 
 ## What It Does
 
 - Answers DNS queries over UDP/TCP using `github.com/miekg/dns`.
 - Supports DNS over HTTPS (DoH) at `/dns-query`.
-- Keeps active `A` records and zone (`NS`/`SOA`) config in memory.
+- Keeps active `A`/`AAAA`/`TXT` records and zone (`NS`/`SOA`) config in memory.
 - Persists all records and zones in SQLite (pure Go, no CGO).
 - Lets you manage records via HTTP API with token authentication.
 - Replicates updates to peer nodes through `/v1/sync/event` (for example over VPN).
@@ -44,6 +44,24 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/records/app.example.com" \
   -H "Authorization: Bearer supersecret" \
   -H "Content-Type: application/json" \
   -d '{"ip":"203.0.113.10","ttl":15}'
+```
+
+Create or update an `AAAA` record:
+
+```bash
+curl -sS -X PUT "http://127.0.0.1:8080/v1/records/app.example.com" \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  -d '{"ip":"2001:db8::10","type":"AAAA","ttl":15}'
+```
+
+Create or update a `TXT` record:
+
+```bash
+curl -sS -X PUT "http://127.0.0.1:8080/v1/records/meta.example.com" \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"TXT","text":"site-verification=abc","ttl":60}'
 ```
 
 Delete a record:
@@ -90,9 +108,31 @@ If you expose this publicly, terminate TLS in front of the app (for example with
 - `scripts/bootstrap-db.sh` - seeds zone + sample A records through API into a fresh DB.
 - `scripts/smoke-test.sh` - verifies A/NS/SOA responses and DoH endpoint reachability.
 - `scripts/bootstrap-local-db.sh` - starts local server, bootstraps DB, runs smoke checks.
+- `scripts/add-domain.sh` - adds a zone via API: `domain [ns1] [ns2]`; auto-generates NS hostnames if omitted.
+- `scripts/set-root-ns.sh` - sets zone NS pair and creates glue A records (for example `snail.cloudroof.eu` and `rabbit.cloudroof.eu`).
 
 Example:
 
 ```bash
 bash scripts/bootstrap-local-db.sh
+```
+
+Add a domain quickly:
+
+```bash
+API_TOKEN=supersecret NS1_IP=198.51.100.10 NS2_IP=198.51.100.11 \
+  bash scripts/add-domain.sh cloudroof.eu
+```
+
+With explicit NS names:
+
+```bash
+API_TOKEN=supersecret bash scripts/add-domain.sh cloudroof.eu love.me.cloudroof.eu hate.you.cloudroof.eu
+```
+
+Set root NS hostnames + glue A records:
+
+```bash
+API_TOKEN=supersecret bash scripts/set-root-ns.sh \
+  cloudroof.eu snail.cloudroof.eu 198.51.100.10 rabbit.cloudroof.eu 198.51.100.11
 ```

@@ -49,7 +49,9 @@ func (p *persistence) loadIntoStore(s *store) error {
 	for _, r := range records {
 		s.setRecord(aRecord{
 			Name:      r.Name,
+			Type:      r.Type,
 			IP:        r.IP,
+			Text:      r.Text,
 			TTL:       r.TTL,
 			Zone:      r.Zone,
 			UpdatedAt: r.UpdatedAt,
@@ -62,8 +64,13 @@ func (p *persistence) loadIntoStore(s *store) error {
 }
 
 func (p *persistence) upsertRecord(rec aRecord) error {
+	rec.Type = normalizeRecordType(rec.Type)
+	if rec.Type == "" {
+		rec.Type = "A"
+	}
+
 	var existing recordModel
-	err := p.db.First(&existing, "name = ?", rec.Name).Error
+	err := p.db.First(&existing, "name = ? AND type = ?", rec.Name, rec.Type).Error
 	if err == nil && existing.Version > rec.Version {
 		return nil
 	}
@@ -73,7 +80,9 @@ func (p *persistence) upsertRecord(rec aRecord) error {
 
 	model := recordModel{
 		Name:      rec.Name,
+		Type:      rec.Type,
 		IP:        rec.IP,
+		Text:      rec.Text,
 		TTL:       rec.TTL,
 		Zone:      rec.Zone,
 		UpdatedAt: rec.UpdatedAt,
@@ -87,21 +96,27 @@ func (p *persistence) upsertRecord(rec aRecord) error {
 	return nil
 }
 
-func (p *persistence) deleteRecord(name string, version int64) error {
-	var existing recordModel
-	err := p.db.First(&existing, "name = ?", name).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lookup record before delete: %w", err)
-	}
-	if existing.Version > version {
-		return nil
+func (p *persistence) deleteRecord(name, recordType string, version int64) error {
+	name = normalizeName(name)
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+
+	query := p.db.Model(&recordModel{}).Where("name = ?", name)
+	if recordType == "A" || recordType == "AAAA" {
+		query = query.Where("type = ?", recordType)
 	}
 
-	if err := p.db.Delete(&recordModel{}, "name = ?", name).Error; err != nil {
-		return fmt.Errorf("delete record: %w", err)
+	var records []recordModel
+	if err := query.Find(&records).Error; err != nil {
+		return fmt.Errorf("lookup records before delete: %w", err)
+	}
+
+	for _, rec := range records {
+		if rec.Version > version {
+			continue
+		}
+		if err := p.db.Delete(&recordModel{}, "name = ? AND type = ?", rec.Name, rec.Type).Error; err != nil {
+			return fmt.Errorf("delete record: %w", err)
+		}
 	}
 
 	return nil

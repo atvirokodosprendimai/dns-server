@@ -40,10 +40,12 @@ Modules:
 
 ## 4. Data Model
 
-### 4.1 Record (`A`)
+### 4.1 Record (`A`/`AAAA`/`TXT`)
 
 - `name` (FQDN, normalized lower-case)
-- `ip` (IPv4)
+- `type` (`A`, `AAAA`, or `TXT`)
+- `ip` (IPv4 for `A`, IPv6 for `AAAA`)
+- `text` (for `TXT`)
 - `ttl` (uint32)
 - `zone` (FQDN)
 - `updated_at` (UTC)
@@ -71,13 +73,16 @@ Modules:
 ### 5.1 Supported Types
 
 - `A`
+- `AAAA`
+- `TXT`
 - `NS`
 - `SOA`
-- `ANY` (returns available `A` behavior)
+- `ANY` (returns available `A`/`AAAA`/`TXT` behavior)
 
 ### 5.2 Response Rules
 
-- If `A` record exists: return authoritative `A` answer.
+- If matching `A`/`AAAA`/`TXT` record exists: return authoritative answer.
+- If the name exists but requested type does not exist, return `NOERROR` with empty answer (NODATA).
 - If queried name is inside a managed zone but no matching record: return `NXDOMAIN` and zone SOA in authority section.
 - If queried name is outside managed zones: return `REFUSED`.
 
@@ -189,7 +194,7 @@ Current test coverage target:
 - Config parsing, defaults, and NS behavior.
 - Utility helpers (normalization, token handling, JSON strictness).
 - Store semantics (version guards, longest-zone matching).
-- DNS resolver behavior (`A`, `NXDOMAIN`, `REFUSED`).
+- DNS resolver behavior (`A`, `AAAA`, `TXT`, `NXDOMAIN`, `REFUSED`, NODATA).
 - HTTP auth and API flow.
 - DoH `GET` and `POST` flow.
 - Persistence roundtrip and stale-write protection.

@@ -58,3 +58,15 @@ func TestValidToken(t *testing.T) {
 		t.Fatal("expected X-API-Token to pass")
 	}
 }
+
+func TestNormalizeRecordType(t *testing.T) {
+	if got := normalizeRecordType("aaaa"); got != "AAAA" {
+		t.Fatalf("expected AAAA, got %s", got)
+	}
+	if got := normalizeRecordType("txt"); got != "TXT" {
+		t.Fatalf("expected TXT, got %s", got)
+	}
+	if got := normalizeRecordType("weird"); got != "A" {
+		t.Fatalf("expected fallback A, got %s", got)
+	}
+}

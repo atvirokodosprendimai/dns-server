@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/miekg/dns"
 )
@@ -14,9 +15,10 @@ func newStore() *store {
 }
 
 func (s *store) setRecord(rec aRecord) bool {
-	key := normalizeName(rec.Name)
-	rec.Name = key
+	rec.Name = normalizeName(rec.Name)
+	rec.Type = normalizeRecordType(rec.Type)
 	rec.Zone = normalizeName(rec.Zone)
+	key := recordKey(rec.Name, rec.Type)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -31,28 +33,100 @@ func (s *store) setRecord(rec aRecord) bool {
 }
 
 func (s *store) deleteRecord(name string, version int64) bool {
-	key := normalizeName(name)
+	return s.deleteRecordByType(name, "", version)
+}
+
+func (s *store) deleteRecordByType(name, recordType string, version int64) bool {
+	name = normalizeName(name)
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	deleted := false
 
-	prev, ok := s.records[key]
-	if ok && prev.Version > version {
-		return false
+	for key, prev := range s.records {
+		if prev.Name != name {
+			continue
+		}
+		if recordType != "" && prev.Type != recordType {
+			continue
+		}
+		if prev.Version > version {
+			continue
+		}
+		delete(s.records, key)
+		deleted = true
 	}
 
-	delete(s.records, key)
-	return true
+	return deleted
 }
 
-func (s *store) getRecord(name string) (aRecord, bool) {
-	key := normalizeName(name)
+func (s *store) getRecords(name string, qtype uint16) []aRecord {
+	name = normalizeName(name)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rec, ok := s.records[key]
-	return rec, ok
+	out := make([]aRecord, 0, 2)
+	for _, rec := range s.records {
+		if rec.Name != name {
+			continue
+		}
+		switch qtype {
+		case dns.TypeA:
+			if rec.Type == "A" {
+				out = append(out, rec)
+			}
+		case dns.TypeAAAA:
+			if rec.Type == "AAAA" {
+				out = append(out, rec)
+			}
+		case dns.TypeANY:
+			out = append(out, rec)
+		case dns.TypeTXT:
+			if rec.Type == "TXT" {
+				out = append(out, rec)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Type == out[j].Type {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
+}
+
+func (s *store) getRecord(name string) (aRecord, bool) {
+	recs := s.getRecords(name, dns.TypeANY)
+	if len(recs) == 0 {
+		return aRecord{}, false
+	}
+	for _, rec := range recs {
+		if rec.Type == "A" {
+			return rec, true
+		}
+	}
+	return recs[0], true
+}
+
+func (s *store) hasName(name string) bool {
+	name = normalizeName(name)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, rec := range s.records {
+		if rec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func recordKey(name, recordType string) string {
+	return name + "|" + recordType
 }
 
 func (s *store) listRecords() []aRecord {
