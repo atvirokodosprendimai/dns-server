@@ -142,6 +142,7 @@ If you expose this publicly, terminate TLS in front of the app (for example with
 
 - `scripts/bootstrap-db.sh` - seeds zone + sample A records through API into a fresh DB.
 - `scripts/smoke-test.sh` - verifies A/NS/SOA responses and DoH endpoint reachability.
+- `scripts/smoke-all.sh` - comprehensive smoke tests: RR (`A`/`AAAA` add/remove), TXT, CNAME, MX, NS/SOA, DoH.
 - `scripts/bootstrap-local-db.sh` - starts local server, bootstraps DB, runs smoke checks.
 - `scripts/add-domain.sh` - adds a zone via API: `domain [ns1] [ns2]`; auto-generates NS hostnames if omitted.
 - `scripts/set-root-ns.sh` - sets zone NS pair and creates glue A records (for example `snail.cloudroof.eu` and `rabbit.cloudroof.eu`).
@@ -152,6 +153,14 @@ Example:
 
 ```bash
 bash scripts/bootstrap-local-db.sh
+```
+
+Run comprehensive smoke suite:
+
+```bash
+API_BASE=http://127.0.0.1:8080 API_TOKEN=supersecret DNS_HOST=127.0.0.1 DNS_PORT=53 \
+  ZONE=cloudroof.eu NS1=snail.cloudroof.eu NS2=rabbit.cloudroof.eu \
+  bash scripts/smoke-all.sh
 ```
 
 Add a domain quickly:
