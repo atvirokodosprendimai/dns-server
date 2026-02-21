@@ -51,6 +51,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=dns-server-build
+          cache-to: type=gha,mode=max,scope=dns-server-build,ignore-error=true
 
   cross-build:
     runs-on: ubuntu-latest
