@@ -12,9 +12,11 @@ on:
         required: false
         default: "docker compose pull && docker compose up -d"
         type: string
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - docker-build
+    types:
+      - completed
 
 concurrency:
   group: deploy-edges
@@ -22,6 +24,13 @@ concurrency:
 
 jobs:
   deploy:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     environment: test
     steps:
@@ -48,12 +57,45 @@ jobs:
 
           echo "hosts=${HOSTS}" >> "$GITHUB_OUTPUT"
 
+      - name: Validate SSH auth secrets
+        shell: bash
+        env:
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SSH_USER}" ]]; then
+            echo "DEPLOY_SSH_USER is empty" >&2
+            exit 1
+          fi
+          if [[ -z "${SSH_KEY}" && -z "${SSH_PASSWORD}" ]]; then
+            echo "Provide DEPLOY_SSH_PRIVATE_KEY or DEPLOY_SSH_PASSWORD" >&2
+            exit 1
+          fi
+
+      - name: Normalize SSH key format
+        id: key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          KEY="${RAW_KEY}"
+          KEY="${KEY//\\n/$'\n'}"
+          {
+            echo "key<<EOF"
+            echo "${KEY}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Deploy to all edges via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ steps.targets.outputs.hosts }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          key: ${{ steps.key.outputs.key }}
+          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE }}
           port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
           timeout: 60s

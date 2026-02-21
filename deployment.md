@@ -129,6 +129,11 @@ Deployment job uses GitHub Environment: `test`.
 
 Current workflow does not pin SSH host fingerprints (auto-accept behavior).
 
+Automatic trigger behavior:
+
+- Deploy runs only after `docker-build` workflow completes successfully on `main`.
+- Manual deploy is still available via `workflow_dispatch`.
+
 It runs:
 
 ```bash
@@ -141,12 +146,17 @@ Required GitHub secrets:
 
 - `DEPLOY_HOSTS` (comma-separated hosts/IPs, e.g. `10.10.0.11,10.10.0.12`)
 - `DEPLOY_SSH_USER` (e.g. `root` or deploy user)
-- `DEPLOY_SSH_PRIVATE_KEY` (private key matching public key on edge nodes)
+- `DEPLOY_SSH_PRIVATE_KEY` (private key matching public key on edge nodes) or `DEPLOY_SSH_PASSWORD`
 
 Optional secrets:
 
 - `DEPLOY_SSH_PORT` (default `22`)
 - `DEPLOY_SSH_PASSPHRASE` (if private key is encrypted)
+
+Notes:
+
+- If you store private key with escaped newlines (`\n`), workflow normalizes it automatically.
+- If key auth fails, you can temporarily use `DEPLOY_SSH_PASSWORD` to validate connectivity.
 
 Manual deploy:
 
