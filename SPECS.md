@@ -139,6 +139,12 @@ Response:
 
 Storage: SQLite file path from `DB_PATH`.
 
+Schema management:
+
+- Versioned SQL migrations in `migrations/*.sql`.
+- Applied at startup using `goose`.
+- GORM automatic migrations are not used.
+
 Rules:
 
 - On startup, load all zones then records into memory.

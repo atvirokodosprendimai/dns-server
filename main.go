@@ -14,7 +14,7 @@ func main() {
 	cfg := loadConfig()
 	mem := newStore()
 
-	persist, err := newPersistence(cfg.DBPath)
+	persist, err := newPersistence(cfg.DBPath, cfg.MigrationsDir)
 	if err != nil {
 		log.Fatalf("persistence init failed: %v", err)
 	}

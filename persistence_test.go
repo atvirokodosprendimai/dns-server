@@ -8,7 +8,7 @@ import (
 
 func TestPersistenceRoundTrip(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "roundtrip.db")
-	p, err := newPersistence(dbPath)
+	p, err := newPersistence(dbPath, "migrations")
 	if err != nil {
 		t.Fatalf("newPersistence: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 
 func TestPersistenceVersionGuard(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "version.db")
-	p, err := newPersistence(dbPath)
+	p, err := newPersistence(dbPath, "migrations")
 	if err != nil {
 		t.Fatalf("newPersistence: %v", err)
 	}

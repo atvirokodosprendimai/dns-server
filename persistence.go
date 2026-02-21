@@ -1,26 +1,44 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/glebarez/sqlite"
+	"github.com/pressly/goose/v3"
 	"gorm.io/gorm"
 )
 
-func newPersistence(dbPath string) (*persistence, error) {
+func newPersistence(dbPath, migrationsDir string) (*persistence, error) {
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	if err := db.AutoMigrate(&recordModel{}, &zoneModel{}); err != nil {
-		return nil, fmt.Errorf("migrate sqlite: %w", err)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("open sql db: %w", err)
+	}
+
+	if err := runMigrations(sqlDB, migrationsDir); err != nil {
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	return &persistence{db: db}, nil
+}
+
+func runMigrations(db *sql.DB, migrationsDir string) error {
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		return err
+	}
+	if err := goose.Up(db, migrationsDir); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (p *persistence) loadIntoStore(s *store) error {

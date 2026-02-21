@@ -184,6 +184,7 @@ It lets you:
 
 - Add multiple DNS API endpoints (`name`, `base URL`, `token`).
 - Send the same zone/record upsert and record delete actions to all endpoints.
+- Query all endpoints to see current zones and records on each node.
 - See per-endpoint success/failure response bodies.
 
 Run:
@@ -196,3 +197,15 @@ Environment variables:
 
 - `DASHBOARD_LISTEN` (default `:8090`)
 - `DASHBOARD_STORE` (default `dashboard-endpoints.json`)
+
+## Database migrations
+
+- Schema migrations are versioned SQL files in `migrations/*.sql`.
+- Migrations run on startup via `goose` (no GORM auto-migrate).
+- Optional env override: `MIGRATIONS_DIR` (default `migrations`, container default `/migrations`).
+
+## Deployment
+
+- Runbook: `deployment.md`
+- Edge deployment spec: `specs/edge-deployment-spec.md`
+- Edge files/templates: `deploy/docker-compose.yml`, `deploy/.env.example`

@@ -11,7 +11,7 @@ func newTestServer(t *testing.T) *server {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "dns-test.db")
-	p, err := newPersistence(dbPath)
+	p, err := newPersistence(dbPath, "migrations")
 	if err != nil {
 		t.Fatalf("newPersistence: %v", err)
 	}

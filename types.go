@@ -14,6 +14,7 @@ type config struct {
 	DNSUDPListen   string
 	DNSTCPListen   string
 	DBPath         string
+	MigrationsDir  string
 	APIToken       string
 	SyncToken      string
 	Peers          []string
@@ -97,6 +98,14 @@ type zoneModel struct {
 	SOATTL    uint32    `gorm:"not null"`
 	Serial    uint32    `gorm:"not null;index"`
 	UpdatedAt time.Time `gorm:"not null"`
+}
+
+func (recordModel) TableName() string {
+	return "records"
+}
+
+func (zoneModel) TableName() string {
+	return "zones"
 }
 
 type persistence struct {

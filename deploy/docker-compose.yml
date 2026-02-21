@@ -1,0 +1,15 @@
+services:
+  dns-server:
+    image: ghcr.io/ativorokodosprendimai/dns-server:latest
+    container_name: dns-server
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./.env
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5

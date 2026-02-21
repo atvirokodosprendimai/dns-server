@@ -20,6 +20,9 @@ FROM scratch
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/dns-server /dns-server
+COPY migrations /migrations
+
+ENV MIGRATIONS_DIR=/migrations
 
 EXPOSE 53/udp 53/tcp 8080
 

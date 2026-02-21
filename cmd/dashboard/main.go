@@ -49,8 +49,31 @@ type actionResult struct {
 type pageData struct {
 	Endpoints []endpoint
 	Results   []actionResult
+	States    []endpointState
 	Message   string
 	Now       string
+}
+
+type endpointState struct {
+	Endpoint string
+	Success  bool
+	Error    string
+	Zones    []zoneView
+	Records  []dashboardRecord
+}
+
+type zoneView struct {
+	Zone   string
+	NS     []string
+	SOATTL uint32
+}
+
+type dashboardRecord struct {
+	Name  string
+	Type  string
+	Value string
+	TTL   uint32
+	Zone  string
 }
 
 func main() {
@@ -82,6 +105,7 @@ func main() {
 	mux.HandleFunc("/actions/zone-upsert", s.handleZoneUpsert)
 	mux.HandleFunc("/actions/record-upsert", s.handleRecordUpsert)
 	mux.HandleFunc("/actions/record-delete", s.handleRecordDelete)
+	mux.HandleFunc("/actions/query-state", s.handleQueryState)
 
 	log.Printf("dashboard listening on %s", listen)
 	if err := http.ListenAndServe(listen, mux); err != nil {
@@ -346,6 +370,128 @@ func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request) {
 	s.renderWithResults(w, "record-delete", results)
 }
 
+func (s *server) handleQueryState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	states := s.queryStateAll()
+	if err := s.tpl.Execute(w, pageData{
+		Endpoints: s.store.list(),
+		States:    states,
+		Message:   "Action: query-state",
+		Now:       time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *server) queryStateAll() []endpointState {
+	eps := s.store.list()
+	if len(eps) == 0 {
+		return []endpointState{{Error: "no endpoints configured"}}
+	}
+
+	out := make([]endpointState, len(eps))
+	var wg sync.WaitGroup
+	for i, ep := range eps {
+		wg.Add(1)
+		go func(i int, ep endpoint) {
+			defer wg.Done()
+			st := endpointState{Endpoint: ep.Name}
+
+			var zr struct {
+				Zones []struct {
+					Zone   string   `json:"zone"`
+					NS     []string `json:"ns"`
+					SOATTL uint32   `json:"soa_ttl"`
+				} `json:"zones"`
+			}
+			if err := s.fetchJSON(ep, "/v1/zones", &zr); err != nil {
+				st.Error = "zones fetch failed: " + err.Error()
+				out[i] = st
+				return
+			}
+			st.Zones = make([]zoneView, 0, len(zr.Zones))
+			for _, z := range zr.Zones {
+				st.Zones = append(st.Zones, zoneView{Zone: z.Zone, NS: z.NS, SOATTL: z.SOATTL})
+			}
+
+			var rr struct {
+				Records []struct {
+					Name   string `json:"name"`
+					Type   string `json:"type"`
+					IP     string `json:"ip"`
+					Text   string `json:"text"`
+					Target string `json:"target"`
+					TTL    uint32 `json:"ttl"`
+					Zone   string `json:"zone"`
+				} `json:"records"`
+			}
+			if err := s.fetchJSON(ep, "/v1/records", &rr); err != nil {
+				st.Error = "records fetch failed: " + err.Error()
+				out[i] = st
+				return
+			}
+
+			st.Records = make([]dashboardRecord, 0, len(rr.Records))
+			for _, rec := range rr.Records {
+				value := rec.IP
+				if rec.Type == "TXT" {
+					value = rec.Text
+				}
+				if rec.Type == "CNAME" {
+					value = rec.Target
+				}
+				st.Records = append(st.Records, dashboardRecord{
+					Name:  rec.Name,
+					Type:  rec.Type,
+					Value: value,
+					TTL:   rec.TTL,
+					Zone:  rec.Zone,
+				})
+			}
+
+			st.Success = true
+			out[i] = st
+		}(i, ep)
+	}
+
+	wg.Wait()
+	return out
+}
+
+func (s *server) fetchJSON(ep endpoint, path string, out any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	if ep.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+ep.Token)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *server) broadcastJSON(method, path string, payload any) []actionResult {
 	eps := s.store.list()
 	if len(eps) == 0 {
@@ -525,6 +671,14 @@ const indexHTML = `<!doctype html>
 
     <div class="grid" style="margin-top:16px;">
       <section class="card">
+        <h2>Query Current State</h2>
+        <form method="post" action="/actions/query-state">
+          <p class="small">Fetch current zones and records from all configured DNS endpoints.</p>
+          <button type="submit">Query All Endpoints</button>
+        </form>
+      </section>
+
+      <section class="card">
         <h2>Zone Upsert (NS Sync)</h2>
         <form method="post" action="/actions/zone-upsert">
           <label>Zone</label><input name="zone" placeholder="cloudroof.eu" required>
@@ -586,6 +740,55 @@ const indexHTML = `<!doctype html>
           {{end}}
         </tbody>
       </table>
+    </section>
+    {{end}}
+
+    {{if .States}}
+    <section class="card" style="margin-top:16px;">
+      <h2>Current State</h2>
+      {{range .States}}
+        <div style="margin:12px 0; padding:12px; border:1px solid #e5e7eb; border-radius:10px;">
+          <div><strong>{{if .Endpoint}}{{.Endpoint}}{{else}}unknown-endpoint{{end}}</strong></div>
+          {{if .Success}}
+            <div class="small">Zones: {{len .Zones}} | Records: {{len .Records}}</div>
+            <div style="margin-top:8px;">
+              <div><strong>Zones</strong></div>
+              <table>
+                <thead><tr><th>Zone</th><th>NS</th><th>SOA TTL</th></tr></thead>
+                <tbody>
+                  {{range .Zones}}
+                  <tr>
+                    <td class="mono">{{.Zone}}</td>
+                    <td class="mono">{{range $i, $ns := .NS}}{{if $i}}, {{end}}{{$ns}}{{end}}</td>
+                    <td>{{.SOATTL}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            <div style="margin-top:8px;">
+              <div><strong>Records</strong></div>
+              <table>
+                <thead><tr><th>Name</th><th>Type</th><th>Value</th><th>TTL</th><th>Zone</th></tr></thead>
+                <tbody>
+                  {{range .Records}}
+                  <tr>
+                    <td class="mono">{{.Name}}</td>
+                    <td>{{.Type}}</td>
+                    <td class="mono">{{.Value}}</td>
+                    <td>{{.TTL}}</td>
+                    <td class="mono">{{.Zone}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+          {{else}}
+            <div class="status-bad">FAILED</div>
+            <div class="mono">{{.Error}}</div>
+          {{end}}
+        </div>
+      {{end}}
     </section>
     {{end}}
   </div>
