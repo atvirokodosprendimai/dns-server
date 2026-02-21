@@ -1,0 +1,67 @@
+name: deploy-edges
+
+on:
+  workflow_dispatch:
+    inputs:
+      hosts:
+        description: "Comma-separated edge IPs/hosts (overrides secret DEPLOY_HOSTS)"
+        required: false
+        type: string
+      compose_command:
+        description: "Compose command (default: pull && up -d)"
+        required: false
+        default: "docker compose pull && docker compose up -d"
+        type: string
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-edges
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - name: Resolve hosts
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HOSTS_INPUT="${{ github.event.inputs.hosts }}"
+          HOSTS_SECRET="${{ secrets.DEPLOY_HOSTS }}"
+
+          if [[ -n "${HOSTS_INPUT}" ]]; then
+            HOSTS="${HOSTS_INPUT}"
+          else
+            HOSTS="${HOSTS_SECRET}"
+          fi
+
+          HOSTS="$(echo "${HOSTS}" | tr -d '[:space:]')"
+          if [[ -z "${HOSTS}" ]]; then
+            echo "DEPLOY_HOSTS is empty. Set secret DEPLOY_HOSTS or pass workflow input hosts." >&2
+            exit 1
+          fi
+
+          echo "hosts=${HOSTS}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to all edges via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.targets.outputs.hosts }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          timeout: 60s
+          command_timeout: 20m
+          script_stop: true
+          sync: false
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+          script: |
+            set -euo pipefail
+            cd ~/wg
+            ${{ github.event.inputs.compose_command || 'docker compose pull && docker compose up -d' }}
+            docker compose ps

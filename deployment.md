@@ -120,3 +120,33 @@ API_BASE=http://10.10.0.11:8080 API_TOKEN=... bash scripts/set-root-ns.sh \
 API_BASE=http://10.10.0.11:8080 API_TOKEN=... bash scripts/set-ns-aaaa.sh \
   cloudroof.eu snail.cloudroof.eu 2001:db8::10 rabbit.cloudroof.eu 2001:db8::11
 ```
+
+## 10) GitHub SSH deployment pipeline
+
+Workflow: `.github/workflows/deploy-edges.yml`
+
+Deployment job uses GitHub Environment: `test`.
+
+It runs:
+
+```bash
+cd ~/wg && docker compose pull && docker compose up -d
+```
+
+for all edge hosts over SSH.
+
+Required GitHub secrets:
+
+- `DEPLOY_HOSTS` (comma-separated hosts/IPs, e.g. `10.10.0.11,10.10.0.12`)
+- `DEPLOY_SSH_USER` (e.g. `root` or deploy user)
+- `DEPLOY_SSH_PRIVATE_KEY` (private key matching public key on edge nodes)
+
+Optional secrets:
+
+- `DEPLOY_SSH_PORT` (default `22`)
+- `DEPLOY_HOST_FINGERPRINT` (recommended host key fingerprint pinning)
+
+Manual deploy:
+
+- Trigger `deploy-edges` via GitHub Actions `workflow_dispatch`.
+- Optionally provide `hosts` input to override `DEPLOY_HOSTS` for one-off deploy.
