@@ -177,3 +177,26 @@ func TestResolveDNSReturnsCNAMEForAQueryWhenAliasExists(t *testing.T) {
 		t.Fatalf("expected CNAME in answer for A query, got %T", resp.Answer[0])
 	}
 }
+
+func TestResolveDNSMXRecord(t *testing.T) {
+	s := newTestServer(t)
+	now := time.Now().UTC()
+	s.data.upsertZone(zoneConfig{Zone: "example.com", NS: []string{"love.me.cloudroof.eu"}, SOATTL: 60, Serial: 1, UpdatedAt: now})
+	s.data.addRecord(aRecord{Name: "example.com", Type: "MX", Zone: "example.com", Target: "mail1.example.com", Priority: 20, TTL: 60, Version: 1, UpdatedAt: now})
+	s.data.addRecord(aRecord{Name: "example.com", Type: "MX", Zone: "example.com", Target: "mail0.example.com", Priority: 10, TTL: 60, Version: 1, UpdatedAt: now})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeMX)
+	resp := s.resolveDNS(req)
+	if resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected success rcode, got %d", resp.Rcode)
+	}
+	if len(resp.Answer) != 2 {
+		t.Fatalf("expected two MX answers, got %d", len(resp.Answer))
+	}
+	mx1 := resp.Answer[0].(*dns.MX)
+	mx2 := resp.Answer[1].(*dns.MX)
+	if mx1.Preference > mx2.Preference {
+		t.Fatalf("expected MX sorted by preference, got %d then %d", mx1.Preference, mx2.Preference)
+	}
+}

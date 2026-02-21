@@ -33,11 +33,13 @@ type zoneConfig struct {
 }
 
 type aRecord struct {
+	ID        uint64    `json:"id,omitempty"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	IP        string    `json:"ip"`
 	Text      string    `json:"text,omitempty"`
 	Target    string    `json:"target,omitempty"`
+	Priority  uint16    `json:"priority,omitempty"`
 	TTL       uint32    `json:"ttl"`
 	Zone      string    `json:"zone"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -62,6 +64,7 @@ type upsertRecordRequest struct {
 	Type      string `json:"type,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Target    string `json:"target,omitempty"`
+	Priority  uint16 `json:"priority,omitempty"`
 	TTL       uint32 `json:"ttl"`
 	Zone      string `json:"zone"`
 	Propagate *bool  `json:"propagate,omitempty"`
@@ -80,11 +83,13 @@ type store struct {
 }
 
 type recordModel struct {
-	Name      string    `gorm:"primaryKey;size:255"`
-	Type      string    `gorm:"primaryKey;size:10"`
+	ID        uint64    `gorm:"primaryKey;autoIncrement"`
+	Name      string    `gorm:"size:255;index:idx_records_name_type,priority:1"`
+	Type      string    `gorm:"size:10;index:idx_records_name_type,priority:2"`
 	IP        string    `gorm:"size:45"`
 	Text      string    `gorm:"type:text"`
 	Target    string    `gorm:"size:255"`
+	Priority  uint16    `gorm:"not null;default:0"`
 	TTL       uint32    `gorm:"not null"`
 	Zone      string    `gorm:"size:255;not null"`
 	UpdatedAt time.Time `gorm:"not null"`

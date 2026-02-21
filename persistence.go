@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -65,12 +66,14 @@ func (p *persistence) loadIntoStore(s *store) error {
 		return fmt.Errorf("load records: %w", err)
 	}
 	for _, r := range records {
-		s.setRecord(aRecord{
+		s.addRecord(aRecord{
+			ID:        r.ID,
 			Name:      r.Name,
 			Type:      r.Type,
 			IP:        r.IP,
 			Text:      r.Text,
 			Target:    r.Target,
+			Priority:  r.Priority,
 			TTL:       r.TTL,
 			Zone:      r.Zone,
 			UpdatedAt: r.UpdatedAt,
@@ -83,13 +86,38 @@ func (p *persistence) loadIntoStore(s *store) error {
 }
 
 func (p *persistence) upsertRecord(rec aRecord) error {
+	rec = normalizeRecord(rec)
+
+	var existing []recordModel
+	if err := p.db.Where("name = ? AND type = ?", rec.Name, rec.Type).Find(&existing).Error; err != nil {
+		return fmt.Errorf("lookup record set: %w", err)
+	}
+	for _, row := range existing {
+		if row.Version > rec.Version {
+			return nil
+		}
+	}
+	if err := p.db.Where("name = ? AND type = ?", rec.Name, rec.Type).Delete(&recordModel{}).Error; err != nil {
+		return fmt.Errorf("delete existing record set: %w", err)
+	}
+
+	model := recordModelFrom(rec)
+	if err := p.db.Create(&model).Error; err != nil {
+		return fmt.Errorf("create record: %w", err)
+	}
+
+	return nil
+}
+
+func (p *persistence) addRecord(rec aRecord) error {
 	rec.Type = normalizeRecordType(rec.Type)
 	if rec.Type == "" {
 		rec.Type = "A"
 	}
+	rec = normalizeRecord(rec)
 
 	var existing recordModel
-	err := p.db.First(&existing, "name = ? AND type = ?", rec.Name, rec.Type).Error
+	err := recordIdentityQuery(p.db, rec).First(&existing).Error
 	if err == nil && existing.Version > rec.Version {
 		return nil
 	}
@@ -97,20 +125,16 @@ func (p *persistence) upsertRecord(rec aRecord) error {
 		return fmt.Errorf("lookup record: %w", err)
 	}
 
-	model := recordModel{
-		Name:      rec.Name,
-		Type:      rec.Type,
-		IP:        rec.IP,
-		Text:      rec.Text,
-		Target:    rec.Target,
-		TTL:       rec.TTL,
-		Zone:      rec.Zone,
-		UpdatedAt: rec.UpdatedAt,
-		Version:   rec.Version,
-		Source:    rec.Source,
+	model := recordModelFrom(rec)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := p.db.Create(&model).Error; err != nil {
+			return fmt.Errorf("create record: %w", err)
+		}
+		return nil
 	}
-	if err := p.db.Save(&model).Error; err != nil {
-		return fmt.Errorf("save record: %w", err)
+
+	if err := p.db.Model(&existing).Updates(model).Error; err != nil {
+		return fmt.Errorf("update record: %w", err)
 	}
 
 	return nil
@@ -121,7 +145,7 @@ func (p *persistence) deleteRecord(name, recordType string, version int64) error
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
 
 	query := p.db.Model(&recordModel{}).Where("name = ?", name)
-	if recordType == "A" || recordType == "AAAA" {
+	if recordType != "" {
 		query = query.Where("type = ?", recordType)
 	}
 
@@ -134,11 +158,30 @@ func (p *persistence) deleteRecord(name, recordType string, version int64) error
 		if rec.Version > version {
 			continue
 		}
-		if err := p.db.Delete(&recordModel{}, "name = ? AND type = ?", rec.Name, rec.Type).Error; err != nil {
+		if err := p.db.Delete(&recordModel{}, "id = ?", rec.ID).Error; err != nil {
 			return fmt.Errorf("delete record: %w", err)
 		}
 	}
 
+	return nil
+}
+
+func (p *persistence) removeRecord(rec aRecord, version int64) error {
+	rec = normalizeRecord(rec)
+
+	var existing []recordModel
+	if err := recordIdentityQuery(p.db, rec).Find(&existing).Error; err != nil {
+		return fmt.Errorf("lookup records before remove: %w", err)
+	}
+
+	for _, row := range existing {
+		if row.Version > version {
+			continue
+		}
+		if err := p.db.Delete(&recordModel{}, "id = ?", row.ID).Error; err != nil {
+			return fmt.Errorf("delete record by identity: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -188,4 +231,49 @@ func unmarshalNS(v string) ([]string, error) {
 		return nil, err
 	}
 	return normalizeNames(out), nil
+}
+
+func recordModelFrom(rec aRecord) recordModel {
+	return recordModel{
+		Name:      rec.Name,
+		Type:      rec.Type,
+		IP:        rec.IP,
+		Text:      rec.Text,
+		Target:    rec.Target,
+		Priority:  rec.Priority,
+		TTL:       rec.TTL,
+		Zone:      rec.Zone,
+		UpdatedAt: rec.UpdatedAt,
+		Version:   rec.Version,
+		Source:    rec.Source,
+	}
+}
+
+func normalizeRecord(rec aRecord) aRecord {
+	rec.Name = normalizeName(rec.Name)
+	rec.Type = normalizeRecordType(rec.Type)
+	rec.Zone = normalizeName(rec.Zone)
+	rec.Target = normalizeName(rec.Target)
+	rec.Text = strings.TrimSpace(rec.Text)
+	if rec.Type == "A" || rec.Type == "AAAA" {
+		if ip := net.ParseIP(strings.TrimSpace(rec.IP)); ip != nil {
+			rec.IP = ip.String()
+		}
+	}
+	return rec
+}
+
+func recordIdentityQuery(db *gorm.DB, rec aRecord) *gorm.DB {
+	q := db.Model(&recordModel{}).Where("name = ? AND type = ?", rec.Name, rec.Type)
+	switch rec.Type {
+	case "A", "AAAA":
+		q = q.Where("ip = ?", rec.IP)
+	case "TXT":
+		q = q.Where("text = ?", rec.Text)
+	case "CNAME":
+		q = q.Where("target = ?", rec.Target)
+	case "MX":
+		q = q.Where("target = ? AND priority = ?", rec.Target, rec.Priority)
+	}
+	return q
 }

@@ -339,6 +339,10 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request) {
 		body["text"] = value
 	} else if recordType == "CNAME" {
 		body["target"] = value
+	} else if recordType == "MX" {
+		prio, target := parseMXValue(value)
+		body["priority"] = prio
+		body["target"] = target
 	} else {
 		body["ip"] = value
 	}
@@ -420,13 +424,14 @@ func (s *server) queryStateAll() []endpointState {
 
 			var rr struct {
 				Records []struct {
-					Name   string `json:"name"`
-					Type   string `json:"type"`
-					IP     string `json:"ip"`
-					Text   string `json:"text"`
-					Target string `json:"target"`
-					TTL    uint32 `json:"ttl"`
-					Zone   string `json:"zone"`
+					Name     string `json:"name"`
+					Type     string `json:"type"`
+					IP       string `json:"ip"`
+					Text     string `json:"text"`
+					Target   string `json:"target"`
+					Priority uint16 `json:"priority"`
+					TTL      uint32 `json:"ttl"`
+					Zone     string `json:"zone"`
 				} `json:"records"`
 			}
 			if err := s.fetchJSON(ep, "/v1/records", &rr); err != nil {
@@ -443,6 +448,9 @@ func (s *server) queryStateAll() []endpointState {
 				}
 				if rec.Type == "CNAME" {
 					value = rec.Target
+				}
+				if rec.Type == "MX" {
+					value = fmt.Sprintf("%d %s", rec.Priority, rec.Target)
 				}
 				st.Records = append(st.Records, dashboardRecord{
 					Name:  rec.Name,
@@ -594,6 +602,17 @@ func mustAtoi(v string, fallback int) int {
 	return parsed
 }
 
+func parseMXValue(v string) (int, string) {
+	v = strings.TrimSpace(v)
+	parts := strings.Fields(v)
+	if len(parts) >= 2 {
+		prio := mustAtoi(parts[0], 10)
+		target := strings.Join(parts[1:], " ")
+		return prio, target
+	}
+	return 10, v
+}
+
 func urlQueryEscape(v string) string {
 	return url.QueryEscape(v)
 }
@@ -699,8 +718,9 @@ const indexHTML = `<!doctype html>
             <option>AAAA</option>
             <option>TXT</option>
             <option>CNAME</option>
+            <option>MX</option>
           </select>
-          <label>Value (IP for A/AAAA, text for TXT, target host for CNAME)</label><input name="value" required>
+          <label>Value (IP for A/AAAA, text for TXT, target for CNAME, "priority target" for MX)</label><input name="value" required>
           <label>Zone (optional)</label><input name="zone" placeholder="cloudroof.eu">
           <label>TTL</label><input name="ttl" value="60">
           <button type="submit">Sync Record To All Endpoints</button>
@@ -718,6 +738,7 @@ const indexHTML = `<!doctype html>
             <option>AAAA</option>
             <option>TXT</option>
             <option>CNAME</option>
+            <option>MX</option>
           </select>
           <button type="submit">Delete On All Endpoints</button>
         </form>

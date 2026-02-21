@@ -46,6 +46,8 @@ func (s *server) newRouter() http.Handler {
 		r.Use(s.apiAuthMiddleware)
 		r.Get("/v1/records", s.handleRecords)
 		r.Put("/v1/records/{name}", s.handleRecordByName)
+		r.Post("/v1/records/{name}/add", s.handleRecordAdd)
+		r.Post("/v1/records/{name}/remove", s.handleRecordRemove)
 		r.Delete("/v1/records/{name}", s.handleRecordByName)
 		r.Get("/v1/zones", s.handleZones)
 		r.Put("/v1/zones/{zone}", s.handleZoneByName)
@@ -145,59 +147,96 @@ func (s *server) handleRecordByName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name string) {
+func (s *server) handleRecordAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	name := normalizeName(chi.URLParam(r, "name"))
+	if name == "." {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing record name"})
+		return
+	}
+
 	var req upsertRecordRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	text := strings.TrimSpace(req.Text)
-	target := strings.TrimSpace(req.Target)
-	rawType := strings.ToUpper(strings.TrimSpace(req.Type))
-	if rawType == "" {
-		if text != "" {
-			rawType = "TXT"
-		} else if target != "" {
-			rawType = "CNAME"
-		} else {
-			maybeIP := net.ParseIP(strings.TrimSpace(req.IP))
-			if maybeIP != nil && maybeIP.To4() == nil {
-				rawType = "AAAA"
-			} else {
-				rawType = "A"
-			}
-		}
-	}
-	if rawType != "A" && rawType != "AAAA" && rawType != "TXT" && rawType != "CNAME" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be A, AAAA, TXT or CNAME"})
+	now := time.Now().UTC()
+	rec, err := s.buildRecordFromRequest(name, req, now)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	recordType := normalizeRecordType(rawType)
 
-	parsedIP := net.ParseIP(strings.TrimSpace(req.IP))
-	if recordType == "A" {
-		if parsedIP == nil || parsedIP.To4() == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type A requires IPv4"})
-			return
-		}
-	}
-	if recordType == "AAAA" {
-		if parsedIP == nil || parsedIP.To4() != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type AAAA requires IPv6"})
-			return
-		}
-	}
-	if recordType == "TXT" && text == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type TXT requires text field"})
+	zoneCfg := zoneConfig{Zone: rec.Zone}
+	if err := s.ensureZoneDefaults(&zoneCfg, now); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if recordType == "CNAME" {
-		if target == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type CNAME requires target field"})
-			return
+	if s.data.upsertZone(zoneCfg) {
+		if err := s.persist.upsertZone(zoneCfg); err != nil {
+			log.Printf("persist zone failed: %v", err)
 		}
-		target = normalizeName(target)
+	}
+
+	if s.data.addRecord(rec) {
+		if err := s.persist.addRecord(rec); err != nil {
+			log.Printf("persist add record failed: %v", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, rec)
+	if shouldPropagate(req.Propagate) {
+		go s.propagate(syncEvent{OriginNode: s.cfg.NodeID, Op: "add", Record: &rec, Version: rec.Version, EventTime: now})
+	}
+}
+
+func (s *server) handleRecordRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	name := normalizeName(chi.URLParam(r, "name"))
+	if name == "." {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing record name"})
+		return
+	}
+
+	var req upsertRecordRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	rec, err := s.buildRecordFromRequest(name, req, now)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if s.data.removeRecord(rec, rec.Version) {
+		if err := s.persist.removeRecord(rec, rec.Version); err != nil {
+			log.Printf("persist remove record failed: %v", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"removed": rec.Name, "type": rec.Type, "version": rec.Version})
+	if shouldPropagate(req.Propagate) {
+		go s.propagate(syncEvent{OriginNode: s.cfg.NodeID, Op: "remove", Record: &rec, Version: rec.Version, EventTime: now})
+	}
+}
+
+func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name string) {
+	var req upsertRecordRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	ttl := req.TTL
@@ -211,31 +250,18 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 	}
 
 	now := time.Now().UTC()
-	version := now.UnixNano()
-	rec := aRecord{
-		Name:      name,
-		Type:      recordType,
-		IP:        strings.TrimSpace(req.IP),
-		Text:      text,
-		Target:    target,
-		TTL:       ttl,
-		Zone:      zone,
-		UpdatedAt: now,
-		Version:   version,
-		Source:    s.cfg.NodeID,
-	}
-	if recordType == "A" || recordType == "AAAA" {
-		rec.IP = parsedIP.String()
-		rec.Text = ""
-		rec.Target = ""
-	}
-	if recordType == "TXT" {
-		rec.IP = ""
-		rec.Target = ""
-	}
-	if recordType == "CNAME" {
-		rec.IP = ""
-		rec.Text = ""
+	rec, err := s.buildRecordFromRequest(name, upsertRecordRequest{
+		IP:       req.IP,
+		Type:     req.Type,
+		Text:     req.Text,
+		Target:   req.Target,
+		Priority: req.Priority,
+		TTL:      ttl,
+		Zone:     zone,
+	}, now)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	zoneCfg := zoneConfig{
@@ -265,7 +291,7 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request, name
 			OriginNode: s.cfg.NodeID,
 			Op:         "set",
 			Record:     &rec,
-			Version:    version,
+			Version:    rec.Version,
 			EventTime:  now,
 		})
 	}
@@ -275,8 +301,8 @@ func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request, name
 	now := time.Now().UTC()
 	version := now.UnixNano()
 	recordType := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("type")))
-	if recordType != "" && recordType != "A" && recordType != "AAAA" && recordType != "TXT" && recordType != "CNAME" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type filter must be A, AAAA, TXT or CNAME"})
+	if recordType != "" && recordType != "A" && recordType != "AAAA" && recordType != "TXT" && recordType != "CNAME" && recordType != "MX" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type filter must be A, AAAA, TXT, CNAME or MX"})
 		return
 	}
 
@@ -382,47 +408,17 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "record required for set"})
 			return
 		}
-		rec := *ev.Record
+		rec, err := s.normalizeRecordInput(*ev.Record)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set invalid record: " + err.Error()})
+			return
+		}
 		rec.Version = ev.Version
 		if rec.TTL == 0 {
 			rec.TTL = s.cfg.DefaultTTL
 		}
 		if rec.Zone == "" {
 			rec.Zone = s.inferZone(rec.Name)
-		}
-		if strings.TrimSpace(rec.Type) == "" {
-			if strings.TrimSpace(rec.Text) != "" {
-				rec.Type = "TXT"
-			} else if strings.TrimSpace(rec.Target) != "" {
-				rec.Type = "CNAME"
-			} else if ip := net.ParseIP(rec.IP); ip != nil && ip.To4() == nil {
-				rec.Type = "AAAA"
-			}
-		}
-		rec.Type = normalizeRecordType(rec.Type)
-		if rec.Type == "A" && net.ParseIP(rec.IP).To4() == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type A requires IPv4"})
-			return
-		}
-		if rec.Type == "AAAA" {
-			ip := net.ParseIP(rec.IP)
-			if ip == nil || ip.To4() != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type AAAA requires IPv6"})
-				return
-			}
-		}
-		if rec.Type == "TXT" && strings.TrimSpace(rec.Text) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type TXT requires text"})
-			return
-		}
-		if rec.Type == "CNAME" {
-			if strings.TrimSpace(rec.Target) == "" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync set type CNAME requires target"})
-				return
-			}
-			rec.Target = normalizeName(rec.Target)
-			rec.IP = ""
-			rec.Text = ""
 		}
 		rec.Source = ev.OriginNode
 		rec.UpdatedAt = ev.EventTime
@@ -446,10 +442,49 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("sync set skipped zone defaults for %s: %v", rec.Zone, err)
 		}
+	case "add":
+		if ev.Record == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "record required for add"})
+			return
+		}
+		rec, err := s.normalizeRecordInput(*ev.Record)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync add invalid record: " + err.Error()})
+			return
+		}
+		rec.Version = ev.Version
+		if rec.TTL == 0 {
+			rec.TTL = s.cfg.DefaultTTL
+		}
+		if rec.Zone == "" {
+			rec.Zone = s.inferZone(rec.Name)
+		}
+		rec.Source = ev.OriginNode
+		rec.UpdatedAt = ev.EventTime
+		if s.data.addRecord(rec) {
+			if err := s.persist.addRecord(rec); err != nil {
+				log.Printf("persist add record failed: %v", err)
+			}
+		}
+	case "remove":
+		if ev.Record == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "record required for remove"})
+			return
+		}
+		rec, err := s.normalizeRecordInput(*ev.Record)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync remove invalid record: " + err.Error()})
+			return
+		}
+		if s.data.removeRecord(rec, ev.Version) {
+			if err := s.persist.removeRecord(rec, ev.Version); err != nil {
+				log.Printf("persist remove record failed: %v", err)
+			}
+		}
 	case "delete":
 		evType := strings.ToUpper(strings.TrimSpace(ev.Type))
-		if evType != "" && evType != "A" && evType != "AAAA" && evType != "TXT" && evType != "CNAME" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync delete type must be A, AAAA, TXT or CNAME"})
+		if evType != "" && evType != "A" && evType != "AAAA" && evType != "TXT" && evType != "CNAME" && evType != "MX" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync delete type must be A, AAAA, TXT, CNAME or MX"})
 			return
 		}
 		if s.data.deleteRecordByType(ev.Name, evType, ev.Version) {
@@ -473,6 +508,110 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) buildRecordFromRequest(name string, req upsertRecordRequest, now time.Time) (aRecord, error) {
+	rec := aRecord{
+		Name:      name,
+		Type:      strings.ToUpper(strings.TrimSpace(req.Type)),
+		IP:        strings.TrimSpace(req.IP),
+		Text:      strings.TrimSpace(req.Text),
+		Target:    strings.TrimSpace(req.Target),
+		Priority:  req.Priority,
+		TTL:       req.TTL,
+		Zone:      req.Zone,
+		UpdatedAt: now,
+		Version:   now.UnixNano(),
+		Source:    s.cfg.NodeID,
+	}
+	if rec.TTL == 0 {
+		rec.TTL = s.cfg.DefaultTTL
+	}
+	if rec.Zone == "" {
+		rec.Zone = s.inferZone(name)
+	}
+	return s.normalizeRecordInput(rec)
+}
+
+func (s *server) normalizeRecordInput(rec aRecord) (aRecord, error) {
+	rawType := strings.ToUpper(strings.TrimSpace(rec.Type))
+	if rawType == "" {
+		switch {
+		case strings.TrimSpace(rec.Text) != "":
+			rawType = "TXT"
+		case strings.TrimSpace(rec.Target) != "" && rec.Priority > 0:
+			rawType = "MX"
+		case strings.TrimSpace(rec.Target) != "":
+			rawType = "CNAME"
+		default:
+			ip := net.ParseIP(strings.TrimSpace(rec.IP))
+			if ip != nil && ip.To4() == nil {
+				rawType = "AAAA"
+			} else {
+				rawType = "A"
+			}
+		}
+	}
+	rec.Type = normalizeRecordType(rawType)
+	if rawType == "MX" {
+		rec.Type = "MX"
+	}
+
+	switch rec.Type {
+	case "A":
+		ip := net.ParseIP(strings.TrimSpace(rec.IP))
+		if ip == nil || ip.To4() == nil {
+			return rec, errors.New("type A requires IPv4")
+		}
+		rec.IP = ip.String()
+		rec.Text = ""
+		rec.Target = ""
+		rec.Priority = 0
+	case "AAAA":
+		ip := net.ParseIP(strings.TrimSpace(rec.IP))
+		if ip == nil || ip.To4() != nil {
+			return rec, errors.New("type AAAA requires IPv6")
+		}
+		rec.IP = ip.String()
+		rec.Text = ""
+		rec.Target = ""
+		rec.Priority = 0
+	case "TXT":
+		rec.Text = strings.TrimSpace(rec.Text)
+		if rec.Text == "" {
+			return rec, errors.New("type TXT requires text")
+		}
+		rec.IP = ""
+		rec.Target = ""
+		rec.Priority = 0
+	case "CNAME":
+		rec.Target = normalizeName(rec.Target)
+		if rec.Target == "." {
+			return rec, errors.New("type CNAME requires target")
+		}
+		rec.IP = ""
+		rec.Text = ""
+		rec.Priority = 0
+	case "MX":
+		rec.Target = normalizeName(rec.Target)
+		if rec.Target == "." {
+			return rec, errors.New("type MX requires target")
+		}
+		if rec.Priority == 0 {
+			rec.Priority = 10
+		}
+		rec.IP = ""
+		rec.Text = ""
+	default:
+		return rec, errors.New("type must be A, AAAA, TXT, CNAME or MX")
+	}
+
+	rec.Name = normalizeName(rec.Name)
+	rec.Zone = normalizeName(rec.Zone)
+	if rec.Zone == "." {
+		rec.Zone = s.inferZone(rec.Name)
+	}
+	return rec, nil
 }
 
 func (s *server) apiAuthMiddleware(next http.Handler) http.Handler {

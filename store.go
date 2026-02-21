@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -18,16 +19,41 @@ func (s *store) setRecord(rec aRecord) bool {
 	rec.Name = normalizeName(rec.Name)
 	rec.Type = normalizeRecordType(rec.Type)
 	rec.Zone = normalizeName(rec.Zone)
-	key := recordKey(rec.Name, rec.Type)
+	key := recordKey(rec)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prev, ok := s.records[key]
-	if ok && prev.Version > rec.Version {
+	for k, prev := range s.records {
+		if prev.Name != rec.Name || prev.Type != rec.Type {
+			continue
+		}
+		if prev.Version > rec.Version {
+			return false
+		}
+		delete(s.records, k)
+	}
+
+	if prev, ok := s.records[key]; ok && prev.Version > rec.Version {
 		return false
 	}
 
+	s.records[key] = rec
+	return true
+}
+
+func (s *store) addRecord(rec aRecord) bool {
+	rec.Name = normalizeName(rec.Name)
+	rec.Type = normalizeRecordType(rec.Type)
+	rec.Zone = normalizeName(rec.Zone)
+	key := recordKey(rec)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if prev, ok := s.records[key]; ok && prev.Version > rec.Version {
+		return false
+	}
 	s.records[key] = rec
 	return true
 }
@@ -61,6 +87,26 @@ func (s *store) deleteRecordByType(name, recordType string, version int64) bool 
 	return deleted
 }
 
+func (s *store) removeRecord(rec aRecord, version int64) bool {
+	rec.Name = normalizeName(rec.Name)
+	rec.Type = normalizeRecordType(rec.Type)
+	rec.Zone = normalizeName(rec.Zone)
+	key := recordKey(rec)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prev, ok := s.records[key]
+	if !ok {
+		return false
+	}
+	if prev.Version > version {
+		return false
+	}
+	delete(s.records, key)
+	return true
+}
+
 func (s *store) getRecords(name string, qtype uint16) []aRecord {
 	name = normalizeName(name)
 
@@ -89,6 +135,10 @@ func (s *store) getRecords(name string, qtype uint16) []aRecord {
 			}
 		case dns.TypeCNAME:
 			if rec.Type == "CNAME" {
+				out = append(out, rec)
+			}
+		case dns.TypeMX:
+			if rec.Type == "MX" {
 				out = append(out, rec)
 			}
 		}
@@ -129,8 +179,19 @@ func (s *store) hasName(name string) bool {
 	return false
 }
 
-func recordKey(name, recordType string) string {
-	return name + "|" + recordType
+func recordKey(rec aRecord) string {
+	val := ""
+	switch rec.Type {
+	case "A", "AAAA":
+		val = strings.ToLower(strings.TrimSpace(rec.IP))
+	case "TXT":
+		val = rec.Text
+	case "CNAME":
+		val = normalizeName(rec.Target)
+	case "MX":
+		val = fmt.Sprintf("%d|%s", rec.Priority, normalizeName(rec.Target))
+	}
+	return rec.Name + "|" + rec.Type + "|" + val
 }
 
 func (s *store) listRecords() []aRecord {

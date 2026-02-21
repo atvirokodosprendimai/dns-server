@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	mrand "math/rand"
 	"net"
+	"sort"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -44,6 +47,7 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeANY:
+			aAnswers := make([]dns.RR, 0, 4)
 			hasDirectAnswer := false
 			for _, rec := range s.data.getRecords(name, q.Qtype) {
 				if rec.Type == "A" {
@@ -53,7 +57,7 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 						A:   net.ParseIP(rec.IP).To4(),
 					}
 					if rr.A != nil {
-						resp.Answer = append(resp.Answer, rr)
+						aAnswers = append(aAnswers, rr)
 					}
 				}
 				if rec.Type == "AAAA" && q.Qtype == dns.TypeANY {
@@ -79,7 +83,17 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 						Target: normalizeName(rec.Target),
 					})
 				}
+				if rec.Type == "MX" && q.Qtype == dns.TypeANY {
+					hasDirectAnswer = true
+					resp.Answer = append(resp.Answer, &dns.MX{
+						Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rec.TTL},
+						Mx:         normalizeName(rec.Target),
+						Preference: rec.Priority,
+					})
+				}
 			}
+			shuffleRR(aAnswers)
+			resp.Answer = append(resp.Answer, aAnswers...)
 			if q.Qtype == dns.TypeA && !hasDirectAnswer {
 				for _, rec := range s.data.getRecords(name, dns.TypeCNAME) {
 					resp.Answer = append(resp.Answer, &dns.CNAME{
@@ -89,6 +103,7 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 				}
 			}
 		case dns.TypeAAAA:
+			aaaaAnswers := make([]dns.RR, 0, 4)
 			hasDirectAnswer := false
 			for _, rec := range s.data.getRecords(name, q.Qtype) {
 				ip := net.ParseIP(rec.IP)
@@ -96,11 +111,13 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 					continue
 				}
 				hasDirectAnswer = true
-				resp.Answer = append(resp.Answer, &dns.AAAA{
+				aaaaAnswers = append(aaaaAnswers, &dns.AAAA{
 					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
 					AAAA: ip,
 				})
 			}
+			shuffleRR(aaaaAnswers)
+			resp.Answer = append(resp.Answer, aaaaAnswers...)
 			if !hasDirectAnswer {
 				for _, rec := range s.data.getRecords(name, dns.TypeCNAME) {
 					resp.Answer = append(resp.Answer, &dns.CNAME{
@@ -133,6 +150,24 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 					Target: normalizeName(rec.Target),
 				})
 			}
+		case dns.TypeMX:
+			mxAnswers := make([]*dns.MX, 0, 4)
+			for _, rec := range s.data.getRecords(name, q.Qtype) {
+				mxAnswers = append(mxAnswers, &dns.MX{
+					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rec.TTL},
+					Mx:         normalizeName(rec.Target),
+					Preference: rec.Priority,
+				})
+			}
+			sort.SliceStable(mxAnswers, func(i, j int) bool {
+				if mxAnswers[i].Preference == mxAnswers[j].Preference {
+					return mxAnswers[i].Mx < mxAnswers[j].Mx
+				}
+				return mxAnswers[i].Preference < mxAnswers[j].Preference
+			})
+			for _, rr := range mxAnswers {
+				resp.Answer = append(resp.Answer, rr)
+			}
 		case dns.TypeNS:
 			if zone, ok := s.data.getZone(name); ok {
 				for _, ns := range zone.NS {
@@ -158,7 +193,7 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 		}
 
 		if zone, ok := s.data.bestZone(firstQ); ok {
-			if s.data.hasName(firstQ) && (firstType == dns.TypeA || firstType == dns.TypeAAAA || firstType == dns.TypeTXT || firstType == dns.TypeCNAME || firstType == dns.TypeANY) {
+			if s.data.hasName(firstQ) && (firstType == dns.TypeA || firstType == dns.TypeAAAA || firstType == dns.TypeTXT || firstType == dns.TypeCNAME || firstType == dns.TypeMX || firstType == dns.TypeANY) {
 				resp.Rcode = dns.RcodeSuccess
 				resp.Ns = append(resp.Ns, soaForZone(zone))
 			} else {
@@ -171,6 +206,14 @@ func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 	}
 
 	return resp
+}
+
+func shuffleRR(records []dns.RR) {
+	if len(records) < 2 {
+		return
+	}
+	r := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(len(records), func(i, j int) { records[i], records[j] = records[j], records[i] })
 }
 
 func chunkTXT(v string) []string {

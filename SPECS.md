@@ -40,13 +40,14 @@ Modules:
 
 ## 4. Data Model
 
-### 4.1 Record (`A`/`AAAA`/`TXT`/`CNAME`)
+### 4.1 Record (`A`/`AAAA`/`TXT`/`CNAME`/`MX`)
 
 - `name` (FQDN, normalized lower-case)
-- `type` (`A`, `AAAA`, `TXT`, or `CNAME`)
+- `type` (`A`, `AAAA`, `TXT`, `CNAME`, or `MX`)
 - `ip` (IPv4 for `A`, IPv6 for `AAAA`)
 - `text` (for `TXT`)
 - `target` (for `CNAME`)
+- `priority` (for `MX`)
 - `ttl` (uint32)
 - `zone` (FQDN)
 - `updated_at` (UTC)
@@ -77,13 +78,15 @@ Modules:
 - `AAAA`
 - `TXT`
 - `CNAME`
+- `MX`
 - `NS`
 - `SOA`
-- `ANY` (returns available `A`/`AAAA`/`TXT`/`CNAME` behavior)
+- `ANY` (returns available `A`/`AAAA`/`TXT`/`CNAME`/`MX` behavior)
 
 ### 5.2 Response Rules
 
-- If matching `A`/`AAAA`/`TXT`/`CNAME` record exists: return authoritative answer.
+- If matching `A`/`AAAA`/`TXT`/`CNAME`/`MX` record exists: return authoritative answer.
+- For multiple `A`/`AAAA` records, answer order is shuffled per response to improve load distribution.
 - If the name exists but requested type does not exist, return `NOERROR` with empty answer (NODATA).
 - If queried name is inside a managed zone but no matching record: return `NXDOMAIN` and zone SOA in authority section.
 - If queried name is outside managed zones: return `REFUSED`.

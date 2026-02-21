@@ -128,6 +128,61 @@ func TestHTTPRecordUpsertCNAME(t *testing.T) {
 	}
 }
 
+func TestHTTPRecordUpsertMX(t *testing.T) {
+	s := newTestServer(t)
+	r := s.newRouter()
+
+	body := `{"type":"MX","target":"mail.example.com","priority":10,"ttl":20}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/records/example.com", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for MX put, got %d", resp.Code)
+	}
+
+	var out aRecord
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if out.Type != "MX" || out.Target != "mail.example.com." || out.Priority != 10 {
+		t.Fatalf("unexpected MX record: %#v", out)
+	}
+}
+
+func TestHTTPRecordAddAndRemove(t *testing.T) {
+	s := newTestServer(t)
+	r := s.newRouter()
+
+	addReq := httptest.NewRequest(http.MethodPost, "/v1/records/pool.example.com/add", strings.NewReader(`{"type":"A","ip":"198.51.100.1"}`))
+	addReq.Header.Set("Authorization", "Bearer token")
+	addReq.Header.Set("Content-Type", "application/json")
+	addResp := httptest.NewRecorder()
+	r.ServeHTTP(addResp, addReq)
+	if addResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for add, got %d", addResp.Code)
+	}
+
+	addReq2 := httptest.NewRequest(http.MethodPost, "/v1/records/pool.example.com/add", strings.NewReader(`{"type":"A","ip":"198.51.100.2"}`))
+	addReq2.Header.Set("Authorization", "Bearer token")
+	addReq2.Header.Set("Content-Type", "application/json")
+	addResp2 := httptest.NewRecorder()
+	r.ServeHTTP(addResp2, addReq2)
+	if addResp2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for second add, got %d", addResp2.Code)
+	}
+
+	removeReq := httptest.NewRequest(http.MethodPost, "/v1/records/pool.example.com/remove", strings.NewReader(`{"type":"A","ip":"198.51.100.1"}`))
+	removeReq.Header.Set("Authorization", "Bearer token")
+	removeReq.Header.Set("Content-Type", "application/json")
+	removeResp := httptest.NewRecorder()
+	r.ServeHTTP(removeResp, removeReq)
+	if removeResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for remove, got %d", removeResp.Code)
+	}
+}
+
 func TestDoHGetAndPost(t *testing.T) {
 	s := newTestServer(t)
 	now := time.Now().UTC()
