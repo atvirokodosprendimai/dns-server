@@ -15,6 +15,7 @@ type config struct {
 	DNSTCPListen   string
 	DBPath         string
 	MigrationsDir  string
+	DebugLog       bool
 	APIToken       string
 	SyncToken      string
 	Peers          []string

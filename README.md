@@ -30,6 +30,7 @@ Important environment variables:
 - `DNS_UDP_LISTEN` - default is `:53`
 - `DNS_TCP_LISTEN` - default is `:53`
 - `DB_PATH` - SQLite file path, default `dns.db`
+- `DEBUG_LOG` - enable verbose request logging (`true`/`false`, default `false`)
 - `PEERS` - comma-separated peer URLs (without path)
 - `DEFAULT_ZONE` - optional default zone
 - `DEFAULT_NS` - optional default NS list
@@ -209,6 +210,7 @@ It lets you:
 
 - Add multiple DNS API endpoints (`name`, `base URL`, `token`).
 - Send the same zone/record upsert and record delete actions to all endpoints.
+- Add/remove RRset members across all endpoints (`A`/`AAAA` for round-robin pools).
 - Query all endpoints to see current zones and records on each node.
 - See per-endpoint success/failure response bodies.
 

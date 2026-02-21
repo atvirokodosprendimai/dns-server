@@ -104,6 +104,8 @@ func main() {
 	mux.HandleFunc("/endpoints/delete", s.handleDeleteEndpoint)
 	mux.HandleFunc("/actions/zone-upsert", s.handleZoneUpsert)
 	mux.HandleFunc("/actions/record-upsert", s.handleRecordUpsert)
+	mux.HandleFunc("/actions/record-add", s.handleRecordAdd)
+	mux.HandleFunc("/actions/record-remove", s.handleRecordRemove)
 	mux.HandleFunc("/actions/record-delete", s.handleRecordDelete)
 	mux.HandleFunc("/actions/query-state", s.handleQueryState)
 
@@ -334,21 +336,62 @@ func (s *server) handleRecordUpsert(w http.ResponseWriter, r *http.Request) {
 		ttl = "60"
 	}
 
-	body := map[string]any{"type": recordType, "ttl": mustAtoi(ttl, 60), "zone": zone}
-	if recordType == "TXT" {
-		body["text"] = value
-	} else if recordType == "CNAME" {
-		body["target"] = value
-	} else if recordType == "MX" {
-		prio, target := parseMXValue(value)
-		body["priority"] = prio
-		body["target"] = target
-	} else {
-		body["ip"] = value
-	}
+	body := buildRecordBody(recordType, value, zone, mustAtoi(ttl, 60))
 
 	results := s.broadcastJSON(http.MethodPut, "/v1/records/"+name, body)
 	s.renderWithResults(w, "record-upsert", results)
+}
+
+func (s *server) handleRecordAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	recordType := strings.ToUpper(strings.TrimSpace(r.FormValue("type")))
+	zone := strings.TrimSpace(r.FormValue("zone"))
+	ttl := strings.TrimSpace(r.FormValue("ttl"))
+	value := strings.TrimSpace(r.FormValue("value"))
+
+	if name == "" || value == "" {
+		s.renderWithResults(w, "record-add", []actionResult{{Error: "name and value are required"}})
+		return
+	}
+	if recordType == "" {
+		recordType = "A"
+	}
+	if ttl == "" {
+		ttl = "60"
+	}
+
+	body := buildRecordBody(recordType, value, zone, mustAtoi(ttl, 60))
+	results := s.broadcastJSON(http.MethodPost, "/v1/records/"+name+"/add", body)
+	s.renderWithResults(w, "record-add", results)
+}
+
+func (s *server) handleRecordRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	recordType := strings.ToUpper(strings.TrimSpace(r.FormValue("type")))
+	zone := strings.TrimSpace(r.FormValue("zone"))
+	value := strings.TrimSpace(r.FormValue("value"))
+
+	if name == "" || value == "" {
+		s.renderWithResults(w, "record-remove", []actionResult{{Error: "name and value are required"}})
+		return
+	}
+	if recordType == "" {
+		recordType = "A"
+	}
+
+	body := buildRecordBody(recordType, value, zone, 60)
+	results := s.broadcastJSON(http.MethodPost, "/v1/records/"+name+"/remove", body)
+	s.renderWithResults(w, "record-remove", results)
 }
 
 func (s *server) handleRecordDelete(w http.ResponseWriter, r *http.Request) {
@@ -613,6 +656,22 @@ func parseMXValue(v string) (int, string) {
 	return 10, v
 }
 
+func buildRecordBody(recordType, value, zone string, ttl int) map[string]any {
+	body := map[string]any{"type": recordType, "ttl": ttl, "zone": zone}
+	if recordType == "TXT" {
+		body["text"] = value
+	} else if recordType == "CNAME" {
+		body["target"] = value
+	} else if recordType == "MX" {
+		prio, target := parseMXValue(value)
+		body["priority"] = prio
+		body["target"] = target
+	} else {
+		body["ip"] = value
+	}
+	return body
+}
+
 func urlQueryEscape(v string) string {
 	return url.QueryEscape(v)
 }
@@ -724,6 +783,44 @@ const indexHTML = `<!doctype html>
           <label>Zone (optional)</label><input name="zone" placeholder="cloudroof.eu">
           <label>TTL</label><input name="ttl" value="60">
           <button type="submit">Sync Record To All Endpoints</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Record Add (RRset)</h2>
+        <form method="post" action="/actions/record-add">
+          <label>Name</label><input name="name" placeholder="pool.cloudroof.eu" required>
+          <label>Type</label>
+          <select name="type">
+            <option>A</option>
+            <option>AAAA</option>
+            <option>TXT</option>
+            <option>CNAME</option>
+            <option>MX</option>
+          </select>
+          <label>Value (IP for A/AAAA, text for TXT, target for CNAME, "priority target" for MX)</label><input name="value" required>
+          <label>Zone (optional)</label><input name="zone" placeholder="cloudroof.eu">
+          <label>TTL</label><input name="ttl" value="60">
+          <button type="submit">Add Record Member On All Endpoints</button>
+        </form>
+        <p class="small">Use this for RR load distribution by adding multiple A/AAAA values for the same name.</p>
+      </section>
+
+      <section class="card">
+        <h2>Record Remove (RRset)</h2>
+        <form method="post" action="/actions/record-remove">
+          <label>Name</label><input name="name" placeholder="pool.cloudroof.eu" required>
+          <label>Type</label>
+          <select name="type">
+            <option>A</option>
+            <option>AAAA</option>
+            <option>TXT</option>
+            <option>CNAME</option>
+            <option>MX</option>
+          </select>
+          <label>Value to remove (same format as add)</label><input name="value" required>
+          <label>Zone (optional)</label><input name="zone" placeholder="cloudroof.eu">
+          <button type="submit">Remove Record Member On All Endpoints</button>
         </form>
       </section>
 

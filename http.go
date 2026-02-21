@@ -38,6 +38,9 @@ func (s *server) runHTTP(ctx context.Context) error {
 
 func (s *server) newRouter() http.Handler {
 	r := chi.NewRouter()
+	if s.cfg.DebugLog {
+		r.Use(s.httpDebugMiddleware)
+	}
 	r.Get("/healthz", s.handleHealth)
 	r.Get("/dns-query", s.handleDoH)
 	r.Post("/dns-query", s.handleDoH)
@@ -111,6 +114,9 @@ func (s *server) handleDoH(w http.ResponseWriter, r *http.Request) {
 	if err := req.Unpack(payload); err != nil {
 		http.Error(w, "invalid dns message", http.StatusBadRequest)
 		return
+	}
+	if s.cfg.DebugLog {
+		log.Printf("doh query remote=%s q=%s", r.RemoteAddr, formatDNSQuestions(req.Question))
 	}
 
 	resp := s.resolveDNS(&req)
@@ -688,6 +694,32 @@ func (s *server) propagate(ev syncEvent) {
 			}
 		}(peer)
 	}
+}
+
+func (s *server) httpDebugMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(ww, r)
+		log.Printf("http request method=%s path=%s status=%d bytes=%d remote=%s duration=%s", r.Method, r.URL.RequestURI(), ww.status, ww.bytes, r.RemoteAddr, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
 }
 
 func (s *server) inferZone(name string) string {

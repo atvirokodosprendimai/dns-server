@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	mrand "math/rand"
 	"net"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -33,7 +35,13 @@ func (s *server) runDNS(ctx context.Context, network string) error {
 }
 
 func (s *server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
+	if s.cfg.DebugLog {
+		log.Printf("dns query remote=%s id=%d q=%s", w.RemoteAddr().String(), req.Id, formatDNSQuestions(req.Question))
+	}
 	resp := s.resolveDNS(req)
+	if s.cfg.DebugLog {
+		log.Printf("dns response remote=%s id=%d rcode=%d answers=%d", w.RemoteAddr().String(), resp.Id, resp.Rcode, len(resp.Answer))
+	}
 	_ = w.WriteMsg(resp)
 }
 
@@ -214,6 +222,17 @@ func shuffleRR(records []dns.RR) {
 	}
 	r := mrand.New(mrand.NewSource(time.Now().UnixNano()))
 	r.Shuffle(len(records), func(i, j int) { records[i], records[j] = records[j], records[i] })
+}
+
+func formatDNSQuestions(questions []dns.Question) string {
+	if len(questions) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(questions))
+	for _, q := range questions {
+		parts = append(parts, fmt.Sprintf("%s/%s", normalizeName(q.Name), dns.TypeToString[q.Qtype]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func chunkTXT(v string) []string {

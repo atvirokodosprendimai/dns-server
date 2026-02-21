@@ -40,6 +40,7 @@ func loadConfig() config {
 		DNSTCPListen:  envOrDefault("DNS_TCP_LISTEN", ":53"),
 		DBPath:        envOrDefault("DB_PATH", "dns.db"),
 		MigrationsDir: envOrDefault("MIGRATIONS_DIR", "migrations"),
+		DebugLog:      envOrDefaultBool("DEBUG_LOG", false),
 		APIToken:      apiToken,
 		SyncToken:     syncToken,
 		Peers:         splitCSV(os.Getenv("PEERS")),
@@ -97,4 +98,18 @@ func envOrDefaultUint32(key string, fallback uint32) uint32 {
 	}
 
 	return uint32(n)
+}
+
+func envOrDefaultBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+
+	return b
 }
