@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/miekg/dns"
+	"gorm.io/gorm"
 )
 
 type config struct {
@@ -26,6 +29,7 @@ type config struct {
 	HTTPListen     string
 	DNSUDPListen   string
 	DNSTCPListen   string
+	DBPath         string
 	APIToken       string
 	SyncToken      string
 	Peers          []string
@@ -132,7 +136,7 @@ func (s *store) listRecords() []aRecord {
 	return out
 }
 
-func (s *store) upsertZone(z zoneConfig) {
+func (s *store) upsertZone(z zoneConfig) bool {
 	z.Zone = normalizeName(z.Zone)
 	z.NS = normalizeNames(z.NS)
 
@@ -141,10 +145,11 @@ func (s *store) upsertZone(z zoneConfig) {
 
 	prev, ok := s.zones[z.Zone]
 	if ok && prev.Serial > z.Serial {
-		return
+		return false
 	}
 
 	s.zones[z.Zone] = z
+	return true
 }
 
 func (s *store) getZone(zone string) (zoneConfig, bool) {
@@ -213,26 +218,209 @@ func (s *store) bestZone(name string) (zoneConfig, bool) {
 }
 
 type server struct {
-	cfg   config
-	data  *store
-	start time.Time
+	cfg     config
+	data    *store
+	persist *persistence
+	start   time.Time
+}
+
+type recordModel struct {
+	Name      string    `gorm:"primaryKey;size:255"`
+	IP        string    `gorm:"size:45;not null"`
+	TTL       uint32    `gorm:"not null"`
+	Zone      string    `gorm:"size:255;not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+	Version   int64     `gorm:"not null;index"`
+	Source    string    `gorm:"size:128;not null"`
+}
+
+type zoneModel struct {
+	Zone      string    `gorm:"primaryKey;size:255"`
+	NSJSON    string    `gorm:"type:text;not null"`
+	SOATTL    uint32    `gorm:"not null"`
+	Serial    uint32    `gorm:"not null;index"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+type persistence struct {
+	db *gorm.DB
+}
+
+func newPersistence(dbPath string) (*persistence, error) {
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+
+	if err := db.AutoMigrate(&recordModel{}, &zoneModel{}); err != nil {
+		return nil, fmt.Errorf("migrate sqlite: %w", err)
+	}
+
+	return &persistence{db: db}, nil
+}
+
+func (p *persistence) loadIntoStore(s *store) error {
+	var zones []zoneModel
+	if err := p.db.Find(&zones).Error; err != nil {
+		return fmt.Errorf("load zones: %w", err)
+	}
+
+	for _, z := range zones {
+		ns, err := unmarshalNS(z.NSJSON)
+		if err != nil {
+			return fmt.Errorf("decode zone %s: %w", z.Zone, err)
+		}
+		s.upsertZone(zoneConfig{
+			Zone:      z.Zone,
+			NS:        ns,
+			SOATTL:    z.SOATTL,
+			Serial:    z.Serial,
+			UpdatedAt: z.UpdatedAt,
+		})
+	}
+
+	var records []recordModel
+	if err := p.db.Find(&records).Error; err != nil {
+		return fmt.Errorf("load records: %w", err)
+	}
+
+	for _, r := range records {
+		s.setRecord(aRecord{
+			Name:      r.Name,
+			IP:        r.IP,
+			TTL:       r.TTL,
+			Zone:      r.Zone,
+			UpdatedAt: r.UpdatedAt,
+			Version:   r.Version,
+			Source:    r.Source,
+		})
+	}
+
+	return nil
+}
+
+func (p *persistence) upsertRecord(rec aRecord) error {
+	var existing recordModel
+	err := p.db.First(&existing, "name = ?", rec.Name).Error
+	if err == nil && existing.Version > rec.Version {
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("lookup record: %w", err)
+	}
+
+	model := recordModel{
+		Name:      rec.Name,
+		IP:        rec.IP,
+		TTL:       rec.TTL,
+		Zone:      rec.Zone,
+		UpdatedAt: rec.UpdatedAt,
+		Version:   rec.Version,
+		Source:    rec.Source,
+	}
+
+	if err := p.db.Save(&model).Error; err != nil {
+		return fmt.Errorf("save record: %w", err)
+	}
+
+	return nil
+}
+
+func (p *persistence) deleteRecord(name string, version int64) error {
+	var existing recordModel
+	err := p.db.First(&existing, "name = ?", name).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lookup record before delete: %w", err)
+	}
+	if existing.Version > version {
+		return nil
+	}
+
+	if err := p.db.Delete(&recordModel{}, "name = ?", name).Error; err != nil {
+		return fmt.Errorf("delete record: %w", err)
+	}
+
+	return nil
+}
+
+func (p *persistence) upsertZone(z zoneConfig) error {
+	nsJSON, err := marshalNS(z.NS)
+	if err != nil {
+		return err
+	}
+
+	var existing zoneModel
+	err = p.db.First(&existing, "zone = ?", z.Zone).Error
+	if err == nil && existing.Serial > z.Serial {
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("lookup zone: %w", err)
+	}
+
+	model := zoneModel{
+		Zone:      z.Zone,
+		NSJSON:    nsJSON,
+		SOATTL:    z.SOATTL,
+		Serial:    z.Serial,
+		UpdatedAt: z.UpdatedAt,
+	}
+	if err := p.db.Save(&model).Error; err != nil {
+		return fmt.Errorf("save zone: %w", err)
+	}
+
+	return nil
+}
+
+func marshalNS(ns []string) (string, error) {
+	b, err := json.Marshal(ns)
+	if err != nil {
+		return "", fmt.Errorf("encode ns list: %w", err)
+	}
+	return string(b), nil
+}
+
+func unmarshalNS(v string) ([]string, error) {
+	out := []string{}
+	if strings.TrimSpace(v) == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return normalizeNames(out), nil
 }
 
 func main() {
 	cfg := loadConfig()
 	st := newStore()
+	persist, err := newPersistence(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("persistence init failed: %v", err)
+	}
+	if err := persist.loadIntoStore(st); err != nil {
+		log.Fatalf("persistence load failed: %v", err)
+	}
 
 	if cfg.DefaultZone != "" {
-		st.upsertZone(zoneConfig{
+		z := zoneConfig{
 			Zone:      cfg.DefaultZone,
 			NS:        cfg.DefaultNS,
 			SOATTL:    cfg.DefaultTTL,
 			Serial:    uint32(time.Now().Unix()),
 			UpdatedAt: time.Now().UTC(),
-		})
+		}
+		if st.upsertZone(z) {
+			if err := persist.upsertZone(z); err != nil {
+				log.Printf("persist default zone failed: %v", err)
+			}
+		}
 	}
 
-	srv := &server{cfg: cfg, data: st, start: time.Now().UTC()}
+	srv := &server{cfg: cfg, data: st, persist: persist, start: time.Now().UTC()}
 
 	errCh := make(chan error, 3)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -277,6 +465,11 @@ func (s *server) runDNS(ctx context.Context, network string) error {
 }
 
 func (s *server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
+	resp := s.resolveDNS(req)
+	_ = w.WriteMsg(resp)
+}
+
+func (s *server) resolveDNS(req *dns.Msg) *dns.Msg {
 	resp := new(dns.Msg)
 	resp.SetReply(req)
 	resp.Authoritative = true
@@ -325,7 +518,7 @@ func (s *server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		}
 	}
 
-	_ = w.WriteMsg(resp)
+	return resp
 }
 
 func soaForZone(z zoneConfig) dns.RR {
@@ -349,6 +542,7 @@ func soaForZone(z zoneConfig) dns.RR {
 func (s *server) runHTTP(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/dns-query", s.handleDoH)
 	mux.HandleFunc("/v1/records", s.withAuth(s.handleRecords))
 	mux.HandleFunc("/v1/records/", s.withAuth(s.handleRecordByName))
 	mux.HandleFunc("/v1/zones", s.withAuth(s.handleZones))
@@ -378,6 +572,64 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"node_id":    s.cfg.NodeID,
 		"uptime_sec": int(time.Since(s.start).Seconds()),
 	})
+}
+
+func (s *server) handleDoH(w http.ResponseWriter, r *http.Request) {
+	var payload []byte
+
+	switch r.Method {
+	case http.MethodGet:
+		q := strings.TrimSpace(r.URL.Query().Get("dns"))
+		if q == "" {
+			http.Error(w, "missing dns query parameter", http.StatusBadRequest)
+			return
+		}
+
+		decoded, err := base64.RawURLEncoding.DecodeString(q)
+		if err != nil {
+			http.Error(w, "invalid base64url dns parameter", http.StatusBadRequest)
+			return
+		}
+		payload = decoded
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+		if len(body) == 0 {
+			http.Error(w, "empty request body", http.StatusBadRequest)
+			return
+		}
+		payload = body
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if len(payload) > dns.MaxMsgSize {
+		http.Error(w, "dns message too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	var req dns.Msg
+	if err := req.Unpack(payload); err != nil {
+		http.Error(w, "invalid dns message", http.StatusBadRequest)
+		return
+	}
+
+	resp := s.resolveDNS(&req)
+	wire, err := resp.Pack()
+	if err != nil {
+		http.Error(w, "failed to encode dns response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/dns-message")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(wire)
 }
 
 func (s *server) handleRecords(w http.ResponseWriter, r *http.Request) {
@@ -440,15 +692,24 @@ func (s *server) handleRecordByName(w http.ResponseWriter, r *http.Request) {
 			Source:    s.cfg.NodeID,
 		}
 
-		s.data.upsertZone(zoneConfig{
+		zoneCfg := zoneConfig{
 			Zone:      zone,
 			NS:        s.cfg.DefaultNSForZone(zone),
 			SOATTL:    s.cfg.DefaultTTL,
 			Serial:    uint32(now.Unix()),
 			UpdatedAt: now,
-		})
+		}
+		if s.data.upsertZone(zoneCfg) {
+			if err := s.persist.upsertZone(zoneCfg); err != nil {
+				log.Printf("persist zone failed: %v", err)
+			}
+		}
 
-		s.data.setRecord(rec)
+		if s.data.setRecord(rec) {
+			if err := s.persist.upsertRecord(rec); err != nil {
+				log.Printf("persist record failed: %v", err)
+			}
+		}
 		writeJSON(w, http.StatusOK, rec)
 
 		if shouldPropagate(req.Propagate) {
@@ -463,7 +724,11 @@ func (s *server) handleRecordByName(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		now := time.Now().UTC()
 		version := now.UnixNano()
-		s.data.deleteRecord(name, version)
+		if s.data.deleteRecord(name, version) {
+			if err := s.persist.deleteRecord(name, version); err != nil {
+				log.Printf("persist record delete failed: %v", err)
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": name, "version": version})
 
 		propagate := true
@@ -533,7 +798,11 @@ func (s *server) handleZoneByName(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt: now,
 		}
 
-		s.data.upsertZone(z)
+		if s.data.upsertZone(z) {
+			if err := s.persist.upsertZone(z); err != nil {
+				log.Printf("persist zone failed: %v", err)
+			}
+		}
 		writeJSON(w, http.StatusOK, z)
 
 		if shouldPropagate(req.Propagate) {
@@ -583,22 +852,39 @@ func (s *server) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.Source = ev.OriginNode
 		rec.UpdatedAt = ev.EventTime
-		s.data.setRecord(rec)
-		s.data.upsertZone(zoneConfig{
+		if s.data.setRecord(rec) {
+			if err := s.persist.upsertRecord(rec); err != nil {
+				log.Printf("persist record failed: %v", err)
+			}
+		}
+		zoneCfg := zoneConfig{
 			Zone:      rec.Zone,
 			NS:        s.cfg.DefaultNSForZone(rec.Zone),
 			SOATTL:    s.cfg.DefaultTTL,
 			Serial:    uint32(time.Now().Unix()),
 			UpdatedAt: time.Now().UTC(),
-		})
+		}
+		if s.data.upsertZone(zoneCfg) {
+			if err := s.persist.upsertZone(zoneCfg); err != nil {
+				log.Printf("persist zone failed: %v", err)
+			}
+		}
 	case "delete":
-		s.data.deleteRecord(ev.Name, ev.Version)
+		if s.data.deleteRecord(ev.Name, ev.Version) {
+			if err := s.persist.deleteRecord(normalizeName(ev.Name), ev.Version); err != nil {
+				log.Printf("persist record delete failed: %v", err)
+			}
+		}
 	case "zone":
 		if ev.ZoneConfig == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "zone_config required for zone op"})
 			return
 		}
-		s.data.upsertZone(*ev.ZoneConfig)
+		if s.data.upsertZone(*ev.ZoneConfig) {
+			if err := s.persist.upsertZone(*ev.ZoneConfig); err != nil {
+				log.Printf("persist zone failed: %v", err)
+			}
+		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported op"})
 		return
@@ -791,6 +1077,7 @@ func loadConfig() config {
 		HTTPListen:   envOrDefault("HTTP_LISTEN", ":8080"),
 		DNSUDPListen: envOrDefault("DNS_UDP_LISTEN", ":53"),
 		DNSTCPListen: envOrDefault("DNS_TCP_LISTEN", ":53"),
+		DBPath:       envOrDefault("DB_PATH", "dns.db"),
 		APIToken:     apiToken,
 		SyncToken:    syncToken,
 		Peers:        splitCSV(os.Getenv("PEERS")),

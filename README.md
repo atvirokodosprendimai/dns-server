@@ -5,7 +5,9 @@ A minimal authoritative DNS server (`A`, `NS`, `SOA`) with an HTTP control API a
 ## What It Does
 
 - Answers DNS queries over UDP/TCP using `github.com/miekg/dns`.
+- Supports DNS over HTTPS (DoH) at `/dns-query`.
 - Keeps active `A` records and zone (`NS`/`SOA`) config in memory.
+- Persists all records and zones in SQLite (pure Go, no CGO).
 - Lets you manage records via HTTP API with token authentication.
 - Replicates updates to peer nodes through `/v1/sync/event` (for example over VPN).
 
@@ -13,6 +15,7 @@ A minimal authoritative DNS server (`A`, `NS`, `SOA`) with an HTTP control API a
 
 ```bash
 API_TOKEN=supersecret \
+DB_PATH=./dns.db \
 DEFAULT_ZONE=example.com \
 DEFAULT_NS=ns1.example.com,ns2.example.com \
 PEERS=http://10.1.0.2:8080,http://10.1.0.3:8080 \
@@ -26,6 +29,7 @@ Important environment variables:
 - `HTTP_LISTEN` - default is `:8080`
 - `DNS_UDP_LISTEN` - default is `:53`
 - `DNS_TCP_LISTEN` - default is `:53`
+- `DB_PATH` - SQLite file path, default `dns.db`
 - `PEERS` - comma-separated peer URLs (without path)
 - `DEFAULT_ZONE` - optional default zone
 - `DEFAULT_NS` - optional default NS list
@@ -65,3 +69,18 @@ dig @127.0.0.1 app.example.com A +short
 dig @127.0.0.1 example.com NS +short
 dig @127.0.0.1 example.com SOA +short
 ```
+
+## DoH (DNS over HTTPS)
+
+Endpoint:
+
+- `GET /dns-query?dns=<base64url-wire-format>`
+- `POST /dns-query` with `application/dns-message` payload
+
+Example with `curl` and `kdig` (from Knot DNS utils):
+
+```bash
+kdig @127.0.0.1 +https app.example.com A
+```
+
+If you expose this publicly, terminate TLS in front of the app (for example with Caddy, Nginx, or HAProxy), because standard DoH clients expect HTTPS.
