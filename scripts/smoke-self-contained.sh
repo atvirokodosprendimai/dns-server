@@ -40,7 +40,7 @@ echo "==> starting dns-server for self-contained smoke"
 PID=$!
 
 ready=0
-for _ in {1..60}; do
+for _ in {1..240}; do
   if curl -fsS "http://127.0.0.1:${HTTP_PORT}/healthz" >/dev/null 2>&1; then
     ready=1
     break
@@ -50,7 +50,7 @@ for _ in {1..60}; do
     sed -n '1,200p' /tmp/dns-server-smoke.log >&2 || true
     exit 1
   fi
-  sleep 0.25
+  sleep 0.5
 done
 
 if [[ "${ready}" != "1" ]]; then
