@@ -1,0 +1,14 @@
+[
+  {
+    "id": "1771694875152081000",
+    "name": "dns-1",
+    "base_url": "http://10.54.31.161:8080",
+    "token": "JwKKnpPdYARMon2VQOTrQiS/J/2bSRZfpfx0QnmqZOY="
+  },
+  {
+    "id": "1771695019511574000",
+    "name": "dns-2",
+    "base_url": "http://10.54.51.187:8080",
+    "token": "JwKKnpPdYARMon2VQOTrQiS/J/2bSRZfpfx0QnmqZOY="
+  }
+]

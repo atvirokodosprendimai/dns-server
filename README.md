@@ -110,6 +110,8 @@ If you expose this publicly, terminate TLS in front of the app (for example with
 - `scripts/bootstrap-local-db.sh` - starts local server, bootstraps DB, runs smoke checks.
 - `scripts/add-domain.sh` - adds a zone via API: `domain [ns1] [ns2]`; auto-generates NS hostnames if omitted.
 - `scripts/set-root-ns.sh` - sets zone NS pair and creates glue A records (for example `snail.cloudroof.eu` and `rabbit.cloudroof.eu`).
+- `scripts/set-ns-aaaa.sh` - adds or updates AAAA glue for NS1/NS2 (keeps existing A records).
+- `scripts/park-domain.sh` - one script for ipv4-only / ipv6-only / dual-stack parking and NS glue management.
 
 Example:
 
@@ -136,3 +138,52 @@ Set root NS hostnames + glue A records:
 API_TOKEN=supersecret bash scripts/set-root-ns.sh \
   cloudroof.eu snail.cloudroof.eu 198.51.100.10 rabbit.cloudroof.eu 198.51.100.11
 ```
+
+Add AAAA for existing NS hosts (A stays untouched):
+
+```bash
+API_TOKEN=supersecret bash scripts/set-ns-aaaa.sh \
+  cloudroof.eu snail.cloudroof.eu 2001:db8::10 rabbit.cloudroof.eu 2001:db8::11
+```
+
+Park domain and NS per stack mode:
+
+```bash
+# dual-stack domain + dual-stack NS
+API_TOKEN=supersecret \
+PARK_IPV4=198.51.100.50 PARK_IPV6=2001:db8::50 \
+NS1_IPV4=198.51.100.10 NS2_IPV4=198.51.100.11 \
+NS1_IPV6=2001:db8::10 NS2_IPV6=2001:db8::11 \
+bash scripts/park-domain.sh cloudroof.eu dual dual
+
+# ipv4-only parked domain, ipv6-only NS
+API_TOKEN=supersecret \
+PARK_IPV4=198.51.100.50 \
+NS1_IPV6=2001:db8::10 NS2_IPV6=2001:db8::11 \
+bash scripts/park-domain.sh cloudroof.eu ipv4 ipv6
+
+# only NS updates (skip parked domain records)
+API_TOKEN=supersecret SKIP_DOMAIN=1 NS1_IPV6=2001:db8::10 NS2_IPV6=2001:db8::11 \
+bash scripts/park-domain.sh cloudroof.eu ipv4 ipv6
+```
+
+## Dashboard
+
+Basic multi-node sync dashboard is available at `cmd/dashboard`.
+
+It lets you:
+
+- Add multiple DNS API endpoints (`name`, `base URL`, `token`).
+- Send the same zone/record upsert and record delete actions to all endpoints.
+- See per-endpoint success/failure response bodies.
+
+Run:
+
+```bash
+go run ./cmd/dashboard
+```
+
+Environment variables:
+
+- `DASHBOARD_LISTEN` (default `:8090`)
+- `DASHBOARD_STORE` (default `dashboard-endpoints.json`)
