@@ -127,6 +127,8 @@ Workflow: `.github/workflows/deploy-edges.yml`
 
 Deployment job uses GitHub Environment: `test`.
 
+Current workflow does not pin SSH host fingerprints (auto-accept behavior).
+
 It runs:
 
 ```bash
@@ -144,7 +146,7 @@ Required GitHub secrets:
 Optional secrets:
 
 - `DEPLOY_SSH_PORT` (default `22`)
-- `DEPLOY_HOST_FINGERPRINT` (recommended host key fingerprint pinning)
+- `DEPLOY_SSH_PASSPHRASE` (if private key is encrypted)
 
 Manual deploy:
 
