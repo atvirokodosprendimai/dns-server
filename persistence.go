@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -116,24 +115,23 @@ func (p *persistence) addRecord(rec aRecord) error {
 	}
 	rec = normalizeRecord(rec)
 
-	var existing recordModel
-	err := recordIdentityQuery(p.db, rec).First(&existing).Error
-	if err == nil && existing.Version > rec.Version {
-		return nil
-	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	var existingRows []recordModel
+	if err := recordIdentityQuery(p.db, rec).Find(&existingRows).Error; err != nil {
 		return fmt.Errorf("lookup record: %w", err)
+	}
+	if len(existingRows) > 0 && existingRows[0].Version > rec.Version {
+		return nil
 	}
 
 	model := recordModelFrom(rec)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if len(existingRows) == 0 {
 		if err := p.db.Create(&model).Error; err != nil {
 			return fmt.Errorf("create record: %w", err)
 		}
 		return nil
 	}
 
-	if err := p.db.Model(&existing).Updates(model).Error; err != nil {
+	if err := p.db.Model(&existingRows[0]).Updates(model).Error; err != nil {
 		return fmt.Errorf("update record: %w", err)
 	}
 
@@ -191,12 +189,12 @@ func (p *persistence) upsertZone(z zoneConfig) error {
 		return err
 	}
 
-	var existing zoneModel
-	err = p.db.First(&existing, "zone = ?", z.Zone).Error
-	if err == nil && existing.Serial > z.Serial {
+	var existing []zoneModel
+	err = p.db.Where("zone = ?", z.Zone).Limit(1).Find(&existing).Error
+	if err == nil && len(existing) > 0 && existing[0].Serial > z.Serial {
 		return nil
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil {
 		return fmt.Errorf("lookup zone: %w", err)
 	}
 

@@ -133,6 +133,17 @@ Automatic trigger behavior:
 
 - Deploy runs only after `docker-build` workflow completes successfully on `main`.
 - Manual deploy is still available via `workflow_dispatch`.
+- Smoke checks run after successful `deploy-edges` via workflow `smoke-edges`.
+
+Optional smoke-check secrets (Environment `test`):
+
+- `SMOKE_ZONE` (default `cloudroof.eu`)
+- `SMOKE_NS1` (default `snail.cloudroof.eu`)
+- `SMOKE_NS2` (default `rabbit.cloudroof.eu`)
+- `SMOKE_DNS_HOST` (default `127.0.0.1` on edge host)
+- `SMOKE_DNS_PORT` (default `53`)
+- `SMOKE_RR_NAME` (optional, enforces at least 2 A records)
+- `SMOKE_MX_NAME` (optional, enforces at least 1 MX record)
 
 It runs:
 

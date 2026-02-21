@@ -1,0 +1,128 @@
+name: smoke-edges
+
+on:
+  workflow_dispatch:
+    inputs:
+      hosts:
+        description: "Comma-separated edge IPs/hosts (overrides secret DEPLOY_HOSTS)"
+        required: false
+        type: string
+  workflow_run:
+    workflows:
+      - deploy-edges
+    types:
+      - completed
+
+concurrency:
+  group: smoke-edges
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - name: Resolve hosts
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOSTS_INPUT="${{ github.event.inputs.hosts }}"
+          HOSTS_SECRET="${{ secrets.DEPLOY_HOSTS }}"
+          if [[ -n "${HOSTS_INPUT}" ]]; then
+            HOSTS="${HOSTS_INPUT}"
+          else
+            HOSTS="${HOSTS_SECRET}"
+          fi
+          HOSTS="$(echo "${HOSTS}" | tr -d '[:space:]')"
+          if [[ -z "${HOSTS}" ]]; then
+            echo "DEPLOY_HOSTS is empty. Set secret DEPLOY_HOSTS or pass workflow input hosts." >&2
+            exit 1
+          fi
+          echo "hosts=${HOSTS}" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize SSH key format
+        id: key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          KEY="${RAW_KEY}"
+          KEY="${KEY//\\n/$'\n'}"
+          {
+            echo "key<<EOF"
+            echo "${KEY}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run smoke checks on all edges
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.targets.outputs.hosts }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ steps.key.outputs.key }}
+          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          timeout: 60s
+          command_timeout: 20m
+          script_stop: true
+          sync: false
+          script: |
+            set -euo pipefail
+
+            cd ~/wg
+
+            ZONE_INPUT='${{ secrets.SMOKE_ZONE }}'
+            NS1_INPUT='${{ secrets.SMOKE_NS1 }}'
+            NS2_INPUT='${{ secrets.SMOKE_NS2 }}'
+            DNS_HOST_INPUT='${{ secrets.SMOKE_DNS_HOST }}'
+            DNS_PORT_INPUT='${{ secrets.SMOKE_DNS_PORT }}'
+            RR_NAME_INPUT='${{ secrets.SMOKE_RR_NAME }}'
+            MX_NAME_INPUT='${{ secrets.SMOKE_MX_NAME }}'
+
+            ZONE="${ZONE_INPUT:-cloudroof.eu}"
+            NS1="${NS1_INPUT:-snail.cloudroof.eu}"
+            NS2="${NS2_INPUT:-rabbit.cloudroof.eu}"
+            DNS_HOST="${DNS_HOST_INPUT:-127.0.0.1}"
+            DNS_PORT="${DNS_PORT_INPUT:-53}"
+            RR_NAME="${RR_NAME_INPUT:-}"
+            MX_NAME="${MX_NAME_INPUT:-}"
+
+            curl -fsS "http://127.0.0.1:8080/healthz" >/dev/null
+
+            if ! command -v dig >/dev/null 2>&1; then
+              echo "dig not found on edge host; install dnsutils/bind-tools for smoke checks" >&2
+              exit 1
+            fi
+
+            ns_output="$(dig @${DNS_HOST} -p ${DNS_PORT} ${ZONE} NS +short)"
+            echo "${ns_output}"
+            [[ "${ns_output}" == *"${NS1}."* || "${ns_output}" == *"${NS1}"* ]]
+            [[ "${ns_output}" == *"${NS2}."* || "${ns_output}" == *"${NS2}"* ]]
+
+            dig @${DNS_HOST} -p ${DNS_PORT} ${ZONE} SOA +short
+
+            if [[ -n "${RR_NAME}" ]]; then
+              rr_count=$(dig @${DNS_HOST} -p ${DNS_PORT} "${RR_NAME}" A +short | wc -l | tr -d ' ')
+              if [[ "${rr_count}" -lt 2 ]]; then
+                echo "expected at least 2 A records for RR on ${RR_NAME}, got ${rr_count}" >&2
+                exit 1
+              fi
+            fi
+
+            if [[ -n "${MX_NAME}" ]]; then
+              mx_count=$(dig @${DNS_HOST} -p ${DNS_PORT} "${MX_NAME}" MX +short | wc -l | tr -d ' ')
+              if [[ "${mx_count}" -lt 1 ]]; then
+                echo "expected at least 1 MX record for ${MX_NAME}" >&2
+                exit 1
+              fi
+            fi
