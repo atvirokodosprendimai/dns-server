@@ -14,7 +14,7 @@ on:
         type: string
   workflow_run:
     workflows:
-      - docker-build
+      - smoke-self-contained
     types:
       - completed
 

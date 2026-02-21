@@ -1,0 +1,32 @@
+name: smoke-self-contained
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - docker-build
+    types:
+      - completed
+
+jobs:
+  smoke:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run self-contained smoke suite
+        run: |
+          chmod +x scripts/smoke-self-contained.sh scripts/smoke-all.sh scripts/set-root-ns.sh
+          bash scripts/smoke-self-contained.sh

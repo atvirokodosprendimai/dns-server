@@ -131,7 +131,8 @@ Current workflow does not pin SSH host fingerprints (auto-accept behavior).
 
 Automatic trigger behavior:
 
-- Deploy runs only after `docker-build` workflow completes successfully on `main`.
+- Self-contained smoke runs after `docker-build` succeeds.
+- Deploy runs only after `smoke-self-contained` succeeds on `main`.
 - Manual deploy is still available via `workflow_dispatch`.
 - Smoke checks run after successful `deploy-edges` via workflow `smoke-edges`.
 
