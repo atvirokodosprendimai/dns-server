@@ -1,15 +1,15 @@
 # dns-server
 
-Minimalus autoritetingas DNS (`A`, `NS`, `SOA`) su valdymu per HTTP API ir peer-to-peer sinchronizacija tarp anycast mazgu.
+A minimal authoritative DNS server (`A`, `NS`, `SOA`) with an HTTP control API and peer-to-peer synchronization across anycast nodes.
 
-## Ka daro
+## What It Does
 
-- Atsako i DNS uzklausas per UDP/TCP su `github.com/miekg/dns`.
-- Laiko aktyvius `A` ir zonu (`NS`/`SOA`) nustatymus RAM.
-- Leidzia keisti irasus per HTTP API su token autentifikacija.
-- Replikuoja pakeitimus i kitus mazgus per `/v1/sync/event` (pvz., per VPN).
+- Answers DNS queries over UDP/TCP using `github.com/miekg/dns`.
+- Keeps active `A` records and zone (`NS`/`SOA`) config in memory.
+- Lets you manage records via HTTP API with token authentication.
+- Replicates updates to peer nodes through `/v1/sync/event` (for example over VPN).
 
-## Paleidimas
+## Run
 
 ```bash
 API_TOKEN=supersecret \
@@ -19,21 +19,21 @@ PEERS=http://10.1.0.2:8080,http://10.1.0.3:8080 \
 go run .
 ```
 
-Svarbiausi ENV:
+Important environment variables:
 
-- `API_TOKEN` - valdymo API tokenas (`Authorization: Bearer <token>` arba `X-API-Token`)
-- `SYNC_TOKEN` - sync endpoint tokenas (`X-Sync-Token`), jei tuscias -> ima `API_TOKEN`
-- `HTTP_LISTEN` - numatytas `:8080`
-- `DNS_UDP_LISTEN` - numatytas `:53`
-- `DNS_TCP_LISTEN` - numatytas `:53`
-- `PEERS` - kableliais atskirti peer URL (be kelio)
-- `DEFAULT_ZONE` - neprivaloma default zona
-- `DEFAULT_NS` - neprivalomas default NS sarasas
-- `DEFAULT_TTL` - numatytas `20`
+- `API_TOKEN` - control API token (`Authorization: Bearer <token>` or `X-API-Token`)
+- `SYNC_TOKEN` - sync endpoint token (`X-Sync-Token`), if empty it falls back to `API_TOKEN`
+- `HTTP_LISTEN` - default is `:8080`
+- `DNS_UDP_LISTEN` - default is `:53`
+- `DNS_TCP_LISTEN` - default is `:53`
+- `PEERS` - comma-separated peer URLs (without path)
+- `DEFAULT_ZONE` - optional default zone
+- `DEFAULT_NS` - optional default NS list
+- `DEFAULT_TTL` - default is `20`
 
-## API pavyzdziai
+## API Examples
 
-Sukurti/atnaujinti `A` irasa:
+Create or update an `A` record:
 
 ```bash
 curl -sS -X PUT "http://127.0.0.1:8080/v1/records/app.example.com" \
@@ -42,14 +42,14 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/records/app.example.com" \
   -d '{"ip":"203.0.113.10","ttl":15}'
 ```
 
-Istrinti irasa:
+Delete a record:
 
 ```bash
 curl -sS -X DELETE "http://127.0.0.1:8080/v1/records/app.example.com" \
   -H "Authorization: Bearer supersecret"
 ```
 
-Atnaujinti zonos NS:
+Update zone NS:
 
 ```bash
 curl -sS -X PUT "http://127.0.0.1:8080/v1/zones/example.com" \
@@ -58,7 +58,7 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/zones/example.com" \
   -d '{"ns":["ns1.example.com","ns2.example.com"],"soa_ttl":60}'
 ```
 
-Patikra:
+Verify:
 
 ```bash
 dig @127.0.0.1 app.example.com A +short
