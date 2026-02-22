@@ -224,11 +224,15 @@ Basic multi-node sync dashboard is available at `cmd/dashboard`.
 
 It lets you:
 
-- Add multiple DNS API endpoints (`name`, `base URL`, `token`).
-- Send the same zone/record upsert and record delete actions to all endpoints.
-- Add/remove RRset members across all endpoints (`A`/`AAAA` for round-robin pools).
-- Query all endpoints to see current zones and records on each node.
-- See per-endpoint success/failure response bodies.
+- Use cookie auth login with role separation:
+  - super admin/cloud admin side
+  - user side for parking domains and updating `A`/`AAAA`
+- Store dashboard data in SQLite (`users`, sessions, endpoints, domain ownership).
+- Add DNS API endpoints (`name`, `base URL`, `token`) and fan-out changes to all nodes.
+- Assign domains to users; non-admin users can manage only assigned domains.
+- Run admin DNS actions (`zone upsert`, record `set/add/remove/delete`, state query).
+- Add/remove RRset members (`A`/`AAAA`) for round-robin pools.
+- Query all endpoints to view current zones/records per node.
 
 Run:
 
@@ -239,7 +243,9 @@ go run ./cmd/dashboard
 Environment variables:
 
 - `DASHBOARD_LISTEN` (default `:8090`)
-- `DASHBOARD_STORE` (default `dashboard-endpoints.json`)
+- `DASHBOARD_DB` (default `dashboard.db`)
+- `DASHBOARD_ADMIN_USER` (default `admin`)
+- `DASHBOARD_ADMIN_PASSWORD` (default `admin` - change in production)
 
 ## Database migrations
 
@@ -252,3 +258,9 @@ Environment variables:
 - Runbook: `deployment.md`
 - Edge deployment spec: `specs/edge-deployment-spec.md`
 - Edge files/templates: `deploy/docker-compose.yml`, `deploy/.env.example`
+
+## Container Pipelines
+
+- DNS server image workflow: `.github/workflows/docker-build.yml`
+- Dashboard image workflow: `.github/workflows/docker-build-dashboard.yml`
+- Dashboard container Dockerfile: `Dockerfile.dashboard`
