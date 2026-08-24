@@ -37,11 +37,11 @@ jobs:
       - name: Resolve hosts
         id: targets
         shell: bash
+        env:
+          HOSTS_INPUT: ${{ github.event.inputs.hosts }}
+          HOSTS_SECRET: ${{ secrets.DEPLOY_HOSTS }}
         run: |
           set -euo pipefail
-
-          HOSTS_INPUT="${{ github.event.inputs.hosts }}"
-          HOSTS_SECRET="${{ secrets.DEPLOY_HOSTS }}"
 
           if [[ -n "${HOSTS_INPUT}" ]]; then
             HOSTS="${HOSTS_INPUT}"
